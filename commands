@@ -1,0 +1,124 @@
+#!/bin/bash
+set -e;
+
+# Check if name is specified
+if [[ $1 == neo4j:* ]]; then
+    if [[ -z $2 ]]; then
+        echo "You must specify an app name"
+        exit 1
+    else
+        APP="$2"
+        # Check if app exists with the same name
+        if [[ -d "$DOKKU_ROOT/$APP" ]]; then
+            APP_EXISTS=true
+        else
+            APP_EXISTS=false
+        fi
+    fi
+fi
+
+case "$1" in
+
+  neo4j:create)
+    NEO4J_IMAGE=neo4j/$APP
+    # Check if Redis container is installed
+    IMAGE=$(docker images | grep "creativecoding/neo4j-community" |  awk '{print $3}')
+    if [[ -z $IMAGE ]]; then
+        echo "Neo4j Community image not found... Did you run 'dokku plugins-install' ?"
+        exit 1
+    fi
+    # Check if an existing DB volume exists
+    HOST_DIR="$DOKKU_ROOT/.neo4j/$APP"
+    if [[ -d $HOST_DIR ]]; then
+        echo
+        echo "-----> Reusing neo4j/$APP database"
+    else
+        mkdir -p $HOST_DIR/graph.db
+    fi
+    VOLUME="$HOST_DIR/graph.db:/var/neo4j/data/graph.db"
+    # Stop existing container with the same Neo4j
+    ID=$(docker ps | grep "NEO4J_IMAGE":latest |  awk '{print $1}')
+    if [[ ! -z "$ID" ]]; then
+        docker stop $ID > /dev/null
+    fi
+    # Fork Neo4j image
+    ID=$(docker run -d creativecoding/neo4j-community /bin/bash "exit 0")
+    docker wait $ID > /dev/null
+    IMAGE=$(docker commit $ID)
+    docker tag $IMAGE $NEO4J_IMAGE
+    # Launch container
+    ID=$(docker run -v $VOLUME -d $NEO4J_IMAGE /bin/start_neo4j.sh)
+    sleep 4
+    # Link to a potential existing app
+    dokku neo4j:link $APP $APP
+    echo
+    echo "-----> Neo4j container created: $NEO4J_IMAGE"
+    sleep 1
+    dokku neo4j:info $APP
+    ;;
+
+  neo4j:delete)
+    NEO4J_IMAGE=neo4j/$APP
+    # Stop the container
+    ID=$(docker ps -a | grep "$NEO4J_IMAGE":latest |  awk '{print $1}')
+    if [[ ! -z $ID ]]; then
+        docker stop $ID
+    fi
+    # Remove image
+    IMAGE=$(docker images | grep "$NEO4J_IMAGE " |  awk '{print $1}')
+    if [[ ! -z $IMAGE ]]; then
+        docker rmi $IMAGE
+    fi
+    # Remove persistent volume
+    HOST_DIR="$DOKKU_ROOT/.neo4j/$APP"
+    if [[ -d $HOST_DIR ]]; then
+        rm -rf $HOST_DIR
+    fi
+    echo
+    echo "-----> Neo4j container deleted: $NEO4J_IMAGE"
+    ;;
+
+  neo4j:info)
+    NEO4J_IMAGE=neo4j/$APP
+    ID=$(docker ps -a | grep "$NEO4J_IMAGE":latest |  awk '{print $1}')
+    IP=$(docker inspect $ID | grep IPAddress | awk '{ print $2 }' | tr -d ',"')
+    echo
+    echo "       Host: $IP"
+    echo "       REST port: 7474"
+    echo
+    ;;
+
+  neo4j:link)
+    if $APP_EXISTS; then
+        # Check argument
+        if [[ -z $3 ]]; then
+            echo "You must specify a container name"
+            exit 1
+        fi
+        NEO4J_IMAGE="neo4j/$3"
+        ID=$(docker ps -a | grep "$NEO4J_IMAGE":latest |  awk '{print $1}')
+        if [[ -n "$ID" ]]; then
+            IP=$(docker inspect $ID | grep IPAddress | awk '{ print $2 }' | tr -d ',"')
+            # it seems like the dokku way of doing things is using dokku config:set to set environment variables, 
+            # eg, not setting them via modifying the app's ENV file
+            dokku config:set $APP "NEO4J_URL=http://$IP:7474"
+            echo
+            echo "-----> $APP linked to $NEO4J_IMAGE container"
+        fi
+    fi
+    ;;
+
+  help)
+    cat && cat<<EOF
+    neo4j:create <n4j>             Create a Neo4j Community container
+    neo4j:create:enterprise <n4j>  Create a Neo4j Enterprise container
+    neo4j:delete <n4j>             Delete specified Neo4j container
+    neo4j:info <n4j>               Display container information
+    neo4j:link <app> <n4j>         Link an app to a Neo4j container
+    neo4j:expose <n4j> <domain>    Exposes a Neo4j database trough Nginx
+    neo4j:hide <n4j>               Hides a Neo4j database from external access
+    neo4j:backup <n4j>             Backup a Neo4j database
+EOF
+    ;;
+
+esac

@@ -1,0 +1,5 @@
+#!/bin/bash
+
+# Build docker image
+docker build -q=true -t creativecoding/neo4j-community github.com/creativecodingos/dokku-neo4j-dockerfiles.git
+docker build -q=true -t creativecoding/neo4j-enterprise github.com/creativecodingos/dokku-neo4j-enterprise-dockerfiles.git
