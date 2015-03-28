@@ -56,6 +56,44 @@ case "$1" in
     sleep 1
     dokku neo4j:info $APP
     ;;
+    
+  neo4j:create:enterprise)
+    NEO4J_IMAGE=neo4j/$APP
+    # Check if Redis container is installed
+    IMAGE=$(docker images | grep "creativecoding/neo4j-enterprise" |  awk '{print $3}')
+    if [[ -z $IMAGE ]]; then
+        echo "Neo4j Enterprise image not found... Did you run 'dokku plugins-install' ?"
+        exit 1
+    fi
+    # Check if an existing DB volume exists
+    HOST_DIR="$DOKKU_ROOT/.neo4j/$APP"
+    if [[ -d $HOST_DIR ]]; then
+        echo
+        echo "-----> Reusing neo4j/$APP database"
+    else
+        mkdir -p $HOST_DIR/graph.db
+    fi
+    VOLUME="$HOST_DIR/graph.db:/var/neo4j/data/graph.db"
+    # Stop existing container with the same Neo4j
+    ID=$(docker ps | grep "NEO4J_IMAGE":latest |  awk '{print $1}')
+    if [[ ! -z "$ID" ]]; then
+        docker stop $ID > /dev/null
+    fi
+    # Fork Neo4j image
+    ID=$(docker run -d creativecoding/neo4j-enterprise /bin/bash "exit 0")
+    docker wait $ID > /dev/null
+    IMAGE=$(docker commit $ID)
+    docker tag $IMAGE $NEO4J_IMAGE
+    # Launch container
+    ID=$(docker run -v $VOLUME -d $NEO4J_IMAGE /bin/start_neo4j.sh)
+    sleep 4
+    # Link to a potential existing app
+    dokku neo4j:link $APP $APP
+    echo
+    echo "-----> Neo4j container created: $NEO4J_IMAGE"
+    sleep 1
+    dokku neo4j:info $APP
+    ;;
 
   neo4j:delete)
     NEO4J_IMAGE=neo4j/$APP
