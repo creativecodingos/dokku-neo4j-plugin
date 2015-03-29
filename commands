@@ -1,5 +1,5 @@
-#!/bin/bash
-set -e;
+#!/usr/bin/env bash
+set -eo pipefail; [[ $DOKKU_TRACE ]] && set -x
 
 # Check if name is specified
 if [[ $1 == neo4j:* ]]; then
@@ -62,7 +62,7 @@ case "$1" in
     dokku neo4j:info $APP
     ;;
     
-  neo4j:create:enterprise)
+  neo4j:create-enterprise)
     NEO4J_IMAGE=neo4j/$APP
     # Check if Redis container is installed
     IMAGE=$(docker images | grep "creativecoding/neo4j-enterprise" |  awk '{print $3}')
@@ -122,7 +122,8 @@ case "$1" in
     # Remove persistent volume
     HOST_DIR="$DOKKU_ROOT/.neo4j/$APP"
     if [[ -d $HOST_DIR ]]; then
-        sudo rm -rf $HOST_DIR
+        rm -rf $HOST_DIR
+        sudo /etc/init.d/nginx reload
     fi
     echo
     echo "-----> Neo4j container deleted: $NEO4J_IMAGE"
@@ -170,7 +171,7 @@ case "$1" in
   help)
     cat && cat<<EOF
     neo4j:create <n4j>             Create a Neo4j Community container
-    neo4j:create:enterprise <n4j>  Create a Neo4j Enterprise container
+    neo4j:create-enterprise <n4j>  Create a Neo4j Enterprise container
     neo4j:delete <n4j>             Delete specified Neo4j container
     neo4j:info <n4j>               Display container information
     neo4j:link <app> <n4j>         Link an app to a Neo4j container
