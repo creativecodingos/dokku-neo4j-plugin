@@ -52,6 +52,7 @@ case "$1" in
     ID=$(docker run -v $VOLUME -d $NEO4J_IMAGE /bin/start_neo4j.sh)
     echo "$ID" > $HOST_DIR/CONTAINER
     echo "community" > $HOST_DIR/VERSION
+    dokku neo4j:info $APP > $HOST_DIR/INFO
     sleep 4
     # Link to a potential existing app
     dokku neo4j:link $APP $APP
@@ -76,6 +77,7 @@ case "$1" in
         echo "-----> Reusing neo4j/$APP database"
     else
         mkdir -p $HOST_DIR/graph.db
+        mkdir $HOST_DIR/.hotbackup
     fi
     VOLUME="$HOST_DIR/graph.db:/var/neo4j/data/graph.db"
     # Stop existing container with the same Neo4j
@@ -94,6 +96,7 @@ case "$1" in
     ID=$(docker run -v $VOLUME -d $NEO4J_IMAGE /bin/start_neo4j.sh)
     echo "$ID" > $HOST_DIR/CONTAINER
     echo "enterprise" > $HOST_DIR/VERSION
+    dokku neo4j:info $APP > $HOST_DIR/INFO
     sleep 4
     # Link to a potential existing app
     dokku neo4j:link $APP $APP
@@ -119,7 +122,7 @@ case "$1" in
     # Remove persistent volume
     HOST_DIR="$DOKKU_ROOT/.neo4j/$APP"
     if [[ -d $HOST_DIR ]]; then
-        rm -rf $HOST_DIR
+        sudo rm -rf $HOST_DIR
     fi
     echo
     echo "-----> Neo4j container deleted: $NEO4J_IMAGE"
@@ -153,6 +156,15 @@ case "$1" in
             echo "-----> $APP linked to $NEO4J_IMAGE container"
         fi
     fi
+    ;;
+    
+  neo4j:backup)
+    NEO4J_IMAGE=neo4j/$APP
+    ID=$(docker ps -a | grep "$NEO4J_IMAGE":latest |  awk '{print $1}')
+    IP=$(docker inspect $ID | grep IPAddress | awk '{ print $2 }' | tr -d ',"')
+    
+    
+    
     ;;
 
   help)
