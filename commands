@@ -85,7 +85,7 @@ case "$1" in
     ID=$(docker run -d creativecoding/neo4j-enterprise /bin/bash "exit 0")
     docker wait $ID > /dev/null
     IMAGE=$(docker commit $ID)
-    docker tag - f $IMAGE $NEO4J_IMAGE
+    docker tag -f $IMAGE $NEO4J_IMAGE
     # Launch container
     ID=$(docker run -v $VOLUME -d $NEO4J_IMAGE /bin/start_neo4j.sh)
     echo "$ID" > $HOST_DIR/CONTAINER
