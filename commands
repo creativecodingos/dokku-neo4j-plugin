@@ -49,6 +49,7 @@ case "$1" in
     # Launch container
     ID=$(docker run -v $VOLUME -d $NEO4J_IMAGE /bin/start_neo4j.sh)
     echo "$ID" > $HOST_DIR/CONTAINER
+    echo "community" > $HOST_DIR/VERSION
     sleep 4
     # Link to a potential existing app
     dokku neo4j:link $APP $APP
@@ -88,6 +89,7 @@ case "$1" in
     # Launch container
     ID=$(docker run -v $VOLUME -d $NEO4J_IMAGE /bin/start_neo4j.sh)
     echo "$ID" > $HOST_DIR/CONTAINER
+    echo "enterprise" > $HOST_DIR/VERSION
     sleep 4
     # Link to a potential existing app
     dokku neo4j:link $APP $APP
