@@ -123,7 +123,7 @@ case "$1" in
     # Remove persistent volume
     HOST_DIR="$DOKKU_ROOT/.neo4j/$APP"
     if [[ -d $HOST_DIR ]]; then
-        rm -rf $HOST_DIR
+        #rm -rf $HOST_DIR
         sudo /etc/init.d/nginx reload
     fi
     echo
