@@ -123,8 +123,11 @@ case "$1" in
     # Remove persistent volume
     HOST_DIR="$DOKKU_ROOT/.neo4j/$APP"
     if [[ -d $HOST_DIR ]]; then
-        #rm -rf $HOST_DIR
-        sudo /etc/init.d/nginx reload
+      VOLUME="$HOST_DIR/graph.db:/var/neo4j/data/graph.db"
+      TO_REMOVE=$(docker run -v $VOLUME creativecoding/neo4j /bin/bash "rm -rf /var/neo4j/data/graph.db");
+        docker rm $TO_REMOVE
+        rm -rf $HOST_DIR
+        # sudo /etc/init.d/nginx reload
     fi
     echo
     echo "-----> Neo4j container deleted: $NEO4J_IMAGE"
