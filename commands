@@ -37,7 +37,7 @@ case "$1" in
     fi
     VOLUME="$HOST_DIR/graph.db:/var/neo4j/data/graph.db"
     # Stop existing container with the same Neo4j
-    ID=$(docker ps | grep "NEO4J_IMAGE":latest |  awk '{print $1}')
+    ID=$(docker ps | grep "$NEO4J_IMAGE":latest |  awk '{print $1}')
     if [[ ! -z "$ID" ]]; then
         docker stop $ID > /dev/null
     fi
@@ -76,7 +76,7 @@ case "$1" in
     fi
     VOLUME="$HOST_DIR/graph.db:/var/neo4j/data/graph.db"
     # Stop existing container with the same Neo4j
-    ID=$(docker ps | grep "NEO4J_IMAGE":latest |  awk '{print $1}')
+    ID=$(docker ps | grep "$NEO4J_IMAGE":latest |  awk '{print $1}')
     if [[ ! -z "$ID" ]]; then
         docker stop $ID > /dev/null
     fi
