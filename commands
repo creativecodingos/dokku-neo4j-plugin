@@ -295,7 +295,12 @@ case "$1" in
           docker start $ID
         fi
         
-        dokku neo4j:info $APP
+        EXPOSED_FILE="$HOST_DIR/EXPOSED"
+        if [[ -f $EXPOSED_FILE ]]; then
+          dokku neo4j:nginx $APP
+        elif
+          dokku neo4j:info $APP
+        fi
         
       fi
       
