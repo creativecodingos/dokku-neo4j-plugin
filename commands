@@ -177,7 +177,7 @@ case "$1" in
       if [[ -f "$HOST_DIR/nginx.conf" ]]; then
       VHOST=$(cat "$HOST_DIR/VHOST")
       echo
-      echo "       Database accessible at http://$VH<<<<<<<<<OST"        
+      echo "       Database accessible at http://$VHOST"        
       fi
       if [[ -f $EXPOSED_FILE ]]; then
       EXPOSED_PORT=$(cat $EXPOSED_FILE)
