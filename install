@@ -5,4 +5,5 @@ docker build -q=true -t creativecoding/neo4j-community github.com/creativecoding
 docker build -q=true -t creativecoding/neo4j-enterprise github.com/creativecodingos/dokku-neo4j-enterprise-dockerfiles.git
 
 mkdir -p $DOKKU_ROOT/.neo4j
+chown -R dokku:dokku $DOKKU_ROOT/.neo4j
 echo "include $DOKKU_ROOT/.neo4j/*/nginx.conf" > /etc/nginx/conf.d/dokku-neo4j-plugin.conf
