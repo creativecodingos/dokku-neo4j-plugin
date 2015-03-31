@@ -2,8 +2,6 @@
 #set -eo pipefail; [[ $DOKKU_TRACE ]] && set -x
 set -e;
 
-source "$(dirname $0)/vars"
-
 # Check if name is specified
 if [[ $1 == neo4j:* ]]; then
     if [[ -z $2 ]]; then
@@ -64,7 +62,13 @@ case "$1" in
     echo
     echo "-----> Neo4j container created: $NEO4J_IMAGE"
     sleep 1
-    dokku neo4j:info $APP
+    
+    NGINX_FILE="$HOST_DIR/nginx.conf"
+    if [[ -f $NGINX_FILE ]]; then
+      dokku neo4j:nginx $APP
+    else
+      dokku neo4j:info $APP
+    fi
     ;;
     
   neo4j:create-enterprise)
@@ -110,7 +114,13 @@ case "$1" in
     echo
     echo "-----> Neo4j container created: $NEO4J_IMAGE"
     sleep 1
-    dokku neo4j:info $APP
+    
+    NGINX_FILE="$HOST_DIR/nginx.conf"
+    if [[ -f $NGINX_FILE ]]; then
+      dokku neo4j:nginx $APP
+    else
+      dokku neo4j:info $APP
+    fi
     ;;
 
   neo4j:delete)
@@ -227,8 +237,82 @@ case "$1" in
   neo4j:backup)
     NEO4J_IMAGE=neo4j/$APP
     HOST_DIR="$DOKKU_ROOT/.neo4j/$APP"
+    S3_FILE="$HOST_DIR/S3"
     VERSION_FILE="$HOST_DIR/VERSION"
     NOW=$(date -u +"%Y-%m-%dT%H.%M.%SZ")
+    
+    HMAC-SHA256s(){
+     KEY="$1"
+     DATA="$2"
+     shift 2
+     printf "$DATA" | openssl dgst -binary -sha256 -hmac "$KEY" | od -An -vtx1 | sed 's/[ \n]//g' | sed 'N;s/\n//'
+    }
+
+    HMAC-SHA256h(){
+     KEY="$1"
+     DATA="$2"
+     shift 2
+     printf "$DATA" | openssl dgst -binary -sha256 -mac HMAC -macopt "hexkey:$KEY" | od -An -vtx1 | sed 's/[ \n]//g' | sed 'N;s/\n//'
+    }
+    
+    s3_backup() {
+      
+      source "$S3_FILE"
+      
+      if [ -n "$S3_KEY" ] && [ -n "$S3_SECRET" ] && [ -n "$BUCKET" ] && [ -n "$REGION" ]; then
+        echo
+        echo "-----> Starting file transfer of $1"
+        echo
+        
+        CONTENT_TYPE="application/octet-stream"
+        
+        FILE="$2"
+        if [[ -n "$PREFIX" ]]; then
+          KEY="$PREFIX/$FILE"
+        else
+          KEY="$FILE"
+        fi
+        
+        
+        REQUEST_TIME=$(date +"%Y%m%dT%H%M%SZ")
+        REQUEST_DATE=$(printf "${REQUEST_TIME}" | cut -c 1-8)
+        AWS4SECRET="AWS4"$S3_SECRET
+        ALGORITHM="AWS4-HMAC-SHA256"
+        EXPIRE=$(date --date="+30 minutes" -u +"%Y-%m-%dT%H:%M:%SZ")
+        ACL="private"
+        
+        POST_POLICY='{"expiration":"'$EXPIRE'","conditions": [{"bucket":"'$BUCKET'" },{"acl":"'$ACL'" },["starts-with", "$key", "'$KEY'"],["eq", "$Content-Type", "application/octet-stream"],{"x-amz-credential":"'$S3_KEY'/'$REQUEST_DATE'/'$REGION'/s3/aws4_request"},{"x-amz-algorithm":"'$ALGORITHM'"},{"x-amz-date":"'$REQUEST_TIME'"}]}'
+
+        UPLOAD_REQUEST=$(printf "$POST_POLICY" | openssl base64 )
+        UPLOAD_REQUEST=$(echo -en $UPLOAD_REQUEST |  sed "s/ //g")
+
+        SIGNATURE=$(HMAC-SHA256h $(HMAC-SHA256h $(HMAC-SHA256h $(HMAC-SHA256h $(HMAC-SHA256s $AWS4SECRET $REQUEST_DATE ) $REGION) "s3") "aws4_request") $UPLOAD_REQUEST)
+        
+        curl \
+        	-F "key=""$KEY" \
+        	-F "acl="$ACL"" \
+        	-F "Content-Type="application/octet-stream"" \
+        	-F "x-amz-algorithm="$ALGORITHM"" \
+        	-F "x-amz-credential="$S3_KEY/$REQUEST_DATE/$REGION/s3/aws4_request"" \
+        	-F "x-amz-date="$REQUEST_TIME"" \
+        	-F "Policy="$UPLOAD_REQUEST"" \
+        	-F "X-Amz-Signature="$SIGNATURE"" \
+        	-F "file=@"$1 http://$BUCKET.s3.amazonaws.com/
+        
+        echo
+        echo "=====> Backup archive transferred to S3"
+        echo "       https://s3.$REGION.amazonaws.com/$BUCKET/$KEY"
+        echo
+        echo       
+        
+      else
+        echo
+        echo "-----> S3 configuration file is not valid"
+        echo "=====> Aborting S3 upload"
+        echo
+      fi
+    
+    }
     
     if [[ -f $VERSION_FILE ]]; then
       VERSION=$(cat $VERSION_FILE)
@@ -261,11 +345,18 @@ case "$1" in
         echo
         echo "-----> Archiving..."
         echo
-        ARCHIVE_FILE=$HOST_DIR/backups/neo4j-$APP-backup-$NOW.tar.gz
+        ARCHIVE_FILE_NAME=neo4j-$APP-backup-$NOW.tar.gz
+        ARCHIVE_FILE=$HOST_DIR/backups/$ARCHIVE_FILE_NAME
         tar --transform "s/^./graph.db/" -czvf $ARCHIVE_FILE -C $HOST_DIR/.hotbackup . > /dev/null
         echo
         echo "=====> Backup saved into $ARCHIVE_FILE"
         echo
+        if [[ -f $S3_FILE ]]; then
+          echo
+          echo "-----> Detected S3 configuration file"
+          echo
+          s3_backup $ARCHIVE_FILE $ARCHIVE_FILE_NAME
+        fi        
         dokku neo4j:info $APP
       fi
       
@@ -291,24 +382,31 @@ case "$1" in
         echo
         echo "-----> Archiving..."
         echo
-        ARCHIVE_FILE=$HOST_DIR/backups/neo4j-$APP-backup-$NOW.tar.gz
+        ARCHIVE_FILE_NAME=neo4j-$APP-backup-$NOW.tar.gz
+        ARCHIVE_FILE=$HOST_DIR/backups/$ARCHIVE_FILE_NAME
         tar -czvf $ARCHIVE_FILE -C $HOST_DIR ./graph.db > /dev/null
         echo
         echo "=====> Backup saved into $ARCHIVE_FILE"
         echo
         
         if [ "$STATUS" = "running" ]; then
-          docker start $ID
+          docker start $ID > /dev/null
           DOWN_END=$(date +%s)
           DOWN_TOTAL=$(( $DOWN_END - $DOWN_START ))
-          echo
           echo "-----> Restarted $NEO4J_IMAGE"
           echo "-----> Database was down for $DOWN_TOTAL seconds"
           echo          
         fi
         
-        EXPOSED_FILE="$HOST_DIR/EXPOSED"
-        if [[ -f $EXPOSED_FILE ]]; then
+        if [[ -f $S3_FILE ]]; then
+          echo
+          echo "-----> Detected S3 configuration file"
+          echo
+          s3_backup $ARCHIVE_FILE $ARCHIVE_FILE_NAME
+        fi  
+        
+        NGINX_FILE="$HOST_DIR/nginx.conf"
+        if [[ -f $NGINX_FILE ]]; then
           dokku neo4j:nginx $APP
         else
           dokku neo4j:info $APP
@@ -346,8 +444,14 @@ case "$1" in
       echo "$ID" > $HOST_DIR/CONTAINER
       EXTERNAL_REST_PORT=$(docker inspect --format='{{(index (index .NetworkSettings.Ports "7474/tcp") 0).HostPort}}' $ID)
       echo $EXTERNAL_REST_PORT > $EXPOSED_FILE
-      dokku neo4j:info $APP > $HOST_DIR/INFO
-      dokku neo4j:info $APP
+      
+      NGINX_FILE="$HOST_DIR/nginx.conf"
+      if [[ -f $NGINX_FILE ]]; then
+        dokku neo4j:nginx $APP
+      else
+        dokku neo4j:info $APP
+      fi
+      
     fi    
     ;;
     
@@ -378,8 +482,14 @@ case "$1" in
       VOLUME="$HOST_DIR/graph.db:/var/neo4j/data/graph.db"
       ID=$(docker run -v $VOLUME -d $NEO4J_IMAGE /bin/start_neo4j.sh)
       echo "$ID" > $HOST_DIR/CONTAINER
-      dokku neo4j:info $APP > $HOST_DIR/INFO
-      dokku neo4j:info $APP
+      
+      NGINX_FILE="$HOST_DIR/nginx.conf"
+      if [[ -f $NGINX_FILE ]]; then
+        dokku neo4j:nginx $APP
+      else
+        dokku neo4j:info $APP
+      fi
+      
     fi
     
     ;;
