@@ -227,7 +227,7 @@ case "$1" in
             IP=$(docker inspect $ID | grep IPAddress | awk '{ print $2 }' | tr -d ',"')
             # it seems like the dokku way of doing things is using dokku config:set to set environment variables, 
             # eg, not setting them via modifying the app's ENV file
-            dokku config:set $APP "NEO4J_URL=http://$IP:7474"
+            dokku config:set $APP "NEO4J_URL=http://$IP:7474" > /dev/null
             echo
             echo "-----> $APP linked to $NEO4J_IMAGE container"
         fi
