@@ -398,6 +398,8 @@ case "$1" in
           echo          
         fi
         
+        dokku neo4j:link $APP $APP
+        
         if [[ -f $S3_FILE ]]; then
           echo
           echo "-----> Detected S3 configuration file"
@@ -445,6 +447,8 @@ case "$1" in
       EXTERNAL_REST_PORT=$(docker inspect --format='{{(index (index .NetworkSettings.Ports "7474/tcp") 0).HostPort}}' $ID)
       echo $EXTERNAL_REST_PORT > $EXPOSED_FILE
       
+      dokku neo4j:link $APP $APP
+      
       NGINX_FILE="$HOST_DIR/nginx.conf"
       if [[ -f $NGINX_FILE ]]; then
         dokku neo4j:nginx $APP
@@ -482,6 +486,8 @@ case "$1" in
       VOLUME="$HOST_DIR/graph.db:/var/neo4j/data/graph.db"
       ID=$(docker run -v $VOLUME -d $NEO4J_IMAGE /bin/start_neo4j.sh)
       echo "$ID" > $HOST_DIR/CONTAINER
+      
+      dokku neo4j:link $APP $APP
       
       NGINX_FILE="$HOST_DIR/nginx.conf"
       if [[ -f $NGINX_FILE ]]; then
