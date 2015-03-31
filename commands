@@ -115,12 +115,18 @@ case "$1" in
     NEO4J_IMAGE=neo4j/$APP
     # Stop the container
     ID=$(docker ps -a | grep "$NEO4J_IMAGE":latest |  awk '{print $1}')
+    RUNNING_ID=$(docker ps | grep "$NEO4J_IMAGE":latest |  awk '{print $1}')
+    if [[ ! -z "$RUNNING_ID" ]]; then
+      echo 
+      echo "-----> Stopping $NEO4J_IMAGE container"
+      echo 
+      docker wait $(docker stop $ID) > /dev/null
+    fi
     if [[ ! -z $ID ]]; then
-        docker wait $(docker stop $ID) > /dev/null
-        docker rm $ID > /dev/null
-        echo 
-        echo "-----> Removed $NEO4J_IMAGE container"
-        echo 
+      docker rm $ID > /dev/null
+      echo 
+      echo "-----> Removed $NEO4J_IMAGE container"
+      echo 
     fi
     # Remove image
     IMAGE=$(docker images | grep "$NEO4J_IMAGE " |  awk '{print $1}')
@@ -130,17 +136,17 @@ case "$1" in
     # Remove persistent volume
     HOST_DIR="$DOKKU_ROOT/.neo4j/$APP"
     if [[ -d $HOST_DIR ]]; then
-        VOLUME="$HOST_DIR/graph.db:/var/neo4j/data/graph.db"
-        TO_REMOVE=$(docker run -v $VOLUME -d creativecoding/neo4j-community /bin/purge_data.sh);
-        docker wait $TO_REMOVE > /dev/null
-        docker rm $TO_REMOVE > /dev/null
-        rm -rf $HOST_DIR
-        echo ""
-        echo "-----> Removed $NEO4J_IMAGE dokku host folder"
-        echo ""
+      VOLUME="$HOST_DIR/graph.db:/var/neo4j/data/graph.db"
+      TO_REMOVE=$(docker run -v $VOLUME -d creativecoding/neo4j-community /bin/purge_data.sh);
+      docker wait $TO_REMOVE > /dev/null
+      docker rm $TO_REMOVE > /dev/null
+      rm -rf $HOST_DIR
+      echo ""
+      echo "-----> Removed $NEO4J_IMAGE dokku host folder"
+      echo ""
     fi
     echo
-    echo "-----> Neo4j container deleted: $NEO4J_IMAGE"
+    echo "-----> $NEO4J_IMAGE has been deleted"
     echo
     ;;
 
@@ -270,6 +276,7 @@ case "$1" in
           echo
           echo "-----> Stopping $NEO4J_IMAGE"
           echo
+          DOWN_START=$(date +%s)
           docker wait $(docker stop $ID) > /dev/null
         fi
         
@@ -289,16 +296,19 @@ case "$1" in
         echo
         
         if [ "$STATUS" = "running" ]; then
-          echo
-          echo "-----> Restarting $NEO4J_IMAGE"
-          echo
           docker start $ID
+          DOWN_END=$(date +%s)
+          DOWN_TOTAL=$(( $DOWN_END - $DOWN_START ))
+          echo
+          echo "-----> Restarted $NEO4J_IMAGE"
+          echo "-----> Database was down for $DOWN_TOTAL seconds"
+          echo          
         fi
         
         EXPOSED_FILE="$HOST_DIR/EXPOSED"
         if [[ -f $EXPOSED_FILE ]]; then
           dokku neo4j:nginx $APP
-        elif
+        else
           dokku neo4j:info $APP
         fi
         
