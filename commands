@@ -146,7 +146,7 @@ case "$1" in
       echo ""
     fi
     echo
-    echo "-----> $NEO4J_IMAGE has been deleted"
+    echo "=====> $NEO4J_IMAGE has been deleted"
     echo
     ;;
 
@@ -170,7 +170,7 @@ case "$1" in
       VERSION="unknown"
     fi
     echo
-    echo "-----> Info of $NEO4J_IMAGE:"
+    echo "=====> Info of $NEO4J_IMAGE:"
     echo
     echo "       Version: $VERSION"
     echo "       Status: $STATUS"
@@ -183,7 +183,7 @@ case "$1" in
       if [[ -f "$HOST_DIR/nginx.conf" ]]; then
       VHOST=$(cat "$HOST_DIR/VHOST")
       echo
-      echo "       Database accessible at http://$VHOST"        
+      echo "   *** Database accessible at http://$VHOST ***"        
       fi
       if [[ -f $EXPOSED_FILE ]]; then
       EXPOSED_PORT=$(cat $EXPOSED_FILE)
@@ -262,7 +262,7 @@ case "$1" in
         ARCHIVE_FILE=$HOST_DIR/backups/neo4j-$APP-backup-$NOW.tar.gz
         tar --transform "s/^./graph.db/" -czvf $ARCHIVE_FILE -C $HOST_DIR/.hotbackup . > /dev/null
         echo
-        echo "-----> Backup saved into $ARCHIVE_FILE"
+        echo "=====> Backup saved into $ARCHIVE_FILE"
         echo
         dokku neo4j:info $APP
       fi
@@ -292,7 +292,7 @@ case "$1" in
         ARCHIVE_FILE=$HOST_DIR/backups/neo4j-$APP-backup-$NOW.tar.gz
         tar -czvf $ARCHIVE_FILE -C $HOST_DIR ./graph.db > /dev/null
         echo
-        echo "-----> Backup saved into $ARCHIVE_FILE"
+        echo "=====> Backup saved into $ARCHIVE_FILE"
         echo
         
         if [ "$STATUS" = "running" ]; then
