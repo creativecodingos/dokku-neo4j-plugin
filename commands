@@ -2,6 +2,8 @@
 #set -eo pipefail; [[ $DOKKU_TRACE ]] && set -x
 set -e;
 
+source "$(dirname $0)/vars"
+
 # Check if name is specified
 if [[ $1 == neo4j:* ]]; then
     if [[ -z $2 ]]; then
