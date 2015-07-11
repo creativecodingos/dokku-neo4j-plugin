@@ -52,7 +52,7 @@ case "$1" in
     docker rm $ID > /dev/null
     docker tag -f $IMAGE $NEO4J_IMAGE
     # Launch container
-    ID=$(docker run -v $VOLUME -d $NEO4J_IMAGE /bin/start_neo4j.sh)
+    ID=$(docker run -v $VOLUME -d "$NEO4J_IMAGE":latest /bin/start_neo4j.sh)
     echo "$ID" > $HOST_DIR/CONTAINER
     echo "community" > $HOST_DIR/VERSION
     dokku neo4j:info $APP > $HOST_DIR/INFO
@@ -104,7 +104,7 @@ case "$1" in
     docker rm $ID > /dev/null
     docker tag -f $IMAGE $NEO4J_IMAGE
     # Launch container
-    ID=$(docker run -v $VOLUME -d $NEO4J_IMAGE /bin/start_neo4j.sh)
+    ID=$(docker run -v $VOLUME -d "$NEO4J_IMAGE":latest /bin/start_neo4j.sh)
     echo "$ID" > $HOST_DIR/CONTAINER
     echo "enterprise" > $HOST_DIR/VERSION
     dokku neo4j:info $APP > $HOST_DIR/INFO
@@ -224,7 +224,7 @@ case "$1" in
         NEO4J_IMAGE="neo4j/$3"
         ID=$(docker ps -a | grep "$NEO4J_IMAGE":latest |  awk '{print $1}')
         if [[ -n "$ID" ]]; then
-            IP=$(docker inspect $ID | grep IPAddress | awk '{ print $2 }' | tr -d ',"')
+            IP=$(docker inspect $ID | grep 'IPAddress"' | awk '{ print $2 }' | tr -d ',"')
             # it seems like the dokku way of doing things is using dokku config:set to set environment variables, 
             # eg, not setting them via modifying the app's ENV file
             echo
@@ -321,7 +321,7 @@ case "$1" in
       
       ID=$(docker ps -a | grep "$NEO4J_IMAGE":latest |  awk '{print $1}')
       RUNNING_ID=$(docker ps | grep "$NEO4J_IMAGE":latest |  awk '{print $1}')
-      IP=$(docker inspect $ID | grep IPAddress | awk '{ print $2 }' | tr -d ',"')
+      IP=$(docker inspect $ID | grep 'IPAddress"' | awk '{ print $2 }' | tr -d ',"')
       
       DOKKU_USER=$(id -u dokku)
       DOKKU_GROUP=$(id -g dokku)
@@ -435,7 +435,7 @@ case "$1" in
       
       ID=$(docker ps -a | grep "$NEO4J_IMAGE":latest |  awk '{print $1}')
       RUNNING_ID=$(docker ps | grep "$NEO4J_IMAGE":latest |  awk '{print $1}')
-      IP=$(docker inspect $ID | grep IPAddress | awk '{ print $2 }' | tr -d ',"')
+      IP=$(docker inspect $ID | grep 'IPAddress"' | awk '{ print $2 }' | tr -d ',"')
       if [[ ! -z "$RUNNING_ID" ]]; then
           echo "-----> Stopping $NEO4J_IMAGE container"
           echo
@@ -475,7 +475,7 @@ case "$1" in
       
       ID=$(docker ps -a | grep "$NEO4J_IMAGE":latest |  awk '{print $1}')
       RUNNING_ID=$(docker ps | grep "$NEO4J_IMAGE":latest |  awk '{print $1}')
-      IP=$(docker inspect $ID | grep IPAddress | awk '{ print $2 }' | tr -d ',"')
+      IP=$(docker inspect $ID | grep 'IPAddress"' | awk '{ print $2 }' | tr -d ',"')
       
       if [[ ! -z "$RUNNING_ID" ]]; then
           echo "-----> Stopping $NEO4J_IMAGE container"
@@ -508,7 +508,7 @@ case "$1" in
     NGINX_CONF="$HOST_DIR/nginx.conf"
     
     ID=$(docker ps -a | grep "$NEO4J_IMAGE":latest |  awk '{print $1}')
-    IP=$(docker inspect $ID | grep IPAddress | awk '{ print $2 }' | tr -d ',"')
+    IP=$(docker inspect $ID | grep 'IPAddress"' | awk '{ print $2 }' | tr -d ',"')
     
     UPSTREAM="neo4j-$APP"
     DOKKU_LISTEN_IPV4="${DOKKU_LISTEN_IPV4:-*}"
