@@ -174,7 +174,7 @@ case "$1" in
     else
       STATUS="stopped"
     fi
-    IP=$(docker inspect $ID | grep IPAddress | awk '{ print $2 }' | tr -d ',"')
+    IP=$(docker inspect $ID | grep 'IPAddress"' | awk '{ print $2 }' | tr -d ',"')
     VERSION_FILE="$DOKKU_ROOT/.neo4j/$APP/VERSION"
     if [[ -f $VERSION_FILE ]]; then
         VERSION=$(cat $VERSION_FILE)
