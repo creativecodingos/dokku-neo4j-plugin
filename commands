@@ -11,7 +11,7 @@ source "$(dirname "$0")/config"
 
 if [[ $1 == $NEO4J_PLUGIN_COMMAND_PREFIX:* ]]; then
   if [[ ! -d $NEO4J_PLUGIN_DATA_ROOT ]]; then
-    dokku_log_fail "$NEO4J_PLUGIN_SERVICE: Please run: sudo dokku plugin:install"
+    dokku_log_fail "$NEO4J_PLUGIN_SERVICE: Please run: sudo dokku plugins-install"
   fi
 fi
 
