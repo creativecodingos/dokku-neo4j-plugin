@@ -1,0 +1,545 @@
+#!/usr/bin/env bash
+set -eo pipefail; [[ $DOKKU_TRACE ]] && set -x
+source "$(dirname "$0")/config"
+
+ensure_docker_images() {
+  local DOCKERFILES_FOLDER="$(dirname "$0")/dockerfiles"
+
+  if ! docker images | grep -e "^$NEO4J_PLUGIN_IMAGE_COMMUNITY " | grep -q "$PLUGIN_IMAGE_VERSION" ; then
+    dokku_log_info1 "$NEO4J_PLUGIN_SERVICE Community v$PLUGIN_IMAGE_VERSION image not found. Building..."
+    docker build -q=true -t "$NEO4J_PLUGIN_IMAGE_COMMUNITY:$PLUGIN_IMAGE_VERSION" "$DOCKERFILES_FOLDER/$NEO4J_IMAGE_VERSION/Community" > /dev/null
+    dokku_log_info1 "Done."
+  fi
+
+  if ! docker images | grep -e "^$NEO4J_NEO4J_PLUGIN_IMAGE_VERSION " | grep -q "$PLUGIN_IMAGE_VERSION" ; then
+    dokku_log_info1 "$NEO4J_PLUGIN_SERVICE Enterprise v$PLUGIN_IMAGE_VERSION image not found. Building..."
+    docker build -q=true -t "$NEO4J_NEO4J_PLUGIN_IMAGE_VERSION:$PLUGIN_IMAGE_VERSION" "$DOCKERFILES_FOLDER/$NEO4J_IMAGE_VERSION/Enterprise" > /dev/null
+    dokku_log_info1 "Done."
+  fi
+}
+
+get_random_ports() {
+  local iterations="${1:-1}"
+  for (( i=0; i < iterations; i++ )); do
+    local port=$RANDOM
+    local quit=0
+    while [ "$quit" -ne 1 ]; do
+      netstat -an | grep $port > /dev/null
+      if [ $? -gt 0 ]; then
+        quit=1
+      else
+        port=$((port + 1))
+      fi
+    done
+    echo $port
+  done
+}
+
+get_container_ip() {
+  docker inspect --format '{{ .NetworkSettings.IPAddress }}' "$1"
+}
+
+propose_linked_apps_restarting() {
+  local SERVICE="$1"
+  local SERVICE_ROOT="$NEO4J_PLUGIN_DATA_ROOT/$SERVICE"
+  local LINKS_FILE="$SERVICE_ROOT/LINKS"
+
+  [[ ! -s "$LINKS_FILE" ]] && return 0
+
+  local APPS_TO_RESTART=()
+
+  while read line; do
+    if is_app_running "$line"; then
+      APPS_TO_RESTART=("${APPS_TO_RESTART[@]}" "$line")
+    fi
+  done < "$LINKS_FILE"
+
+  if [[ ${#APPS_TO_RESTART[@]} -gt 0 ]]; then
+    echo
+    dokku_log_info1 "Service \"$SERVICE\" was linked to the following running apps:"
+    echo
+    for APP in ${APPS_TO_RESTART[@]}; do
+      dokku_log_verbose "- $APP"
+    done
+    echo
+    read -p "Type \"y\" to relink them > " RESTART_APPS
+
+    if [[ "$RESTART_APPS" == "y" ]]; then
+      restart_linked_apps "$SERVICE"
+    fi
+  fi
+}
+
+restart_linked_apps() {
+  local SERVICE="$1"
+  local SERVICE_ROOT="$NEO4J_PLUGIN_DATA_ROOT/$SERVICE"
+  local LINKS_FILE="$SERVICE_ROOT/LINKS"
+  local RESTARTED_APPS=()
+
+  [[ ! -s "$LINKS_FILE" ]] && return 0
+
+  while read line; do
+    if is_app_running "$line"; then
+      echo
+      dokku_log_info2 "Restart \"$line\""
+      echo
+      dokku ps:restart "$line"
+      RESTARTED_APPS=("${RESTARTED_APPS[@]}" "$line")
+    fi
+  done < "$LINKS_FILE"
+
+  if [[ ${#RESTARTED_APPS[@]} -gt 0 ]]; then
+    echo
+    echo
+    dokku_log_info2 "The following apps have been restarted:"
+    echo
+    for APP in ${RESTARTED_APPS[@]}; do
+      dokku_log_verbose "- $APP"
+    done
+  fi
+}
+
+verify_service_name() {
+  local SERVICE="$1"
+  [[ ! -n "$SERVICE" ]] && dokku_log_fail "(verify_service_name) SERVICE must not be null"
+  [[ ! -d "$NEO4J_PLUGIN_DATA_ROOT/$SERVICE" ]] && dokku_log_fail "$NEO4J_PLUGIN_SERVICE service $SERVICE does not exist"
+  return 0
+}
+
+service_alias() {
+  local SERVICE="$1"
+  local ALIAS_FILE="$NEO4J_PLUGIN_DATA_ROOT/$SERVICE/ALIAS"
+
+  verify_service_name "$1"
+  if [[ -f "$ALIAS_FILE" ]]; then
+    cat "$ALIAS_FILE"
+  else
+    echo "$NEO4J_PLUGIN_DEFAULT_ALIAS"
+  fi
+}
+
+service_info() {
+  local SERVICE="$1"
+  local SERVICE_URL=$(service_url "$SERVICE")
+  local SERVICE_VERSION=$(service_version "$SERVICE")
+  local SERVICE_EDITION=$(service_edition "$SERVICE")
+  local SERVICE_ALIAS=$(service_alias "$SERVICE")
+
+  echo
+  dokku_log_info1 "Informations about the Neo4j service \"$SERVICE\""
+  echo
+  echo "       Alias: $SERVICE_ALIAS"
+  echo "       Image: $SERVICE_VERSION"
+  echo "       DSN: $SERVICE_URL"
+}
+
+service_list() {
+  local SERVICES=$(ls "$NEO4J_PLUGIN_DATA_ROOT" 2> /dev/null)
+  if [[ -z $SERVICES ]]; then
+    dokku_log_warn "There are no $NEO4J_PLUGIN_SERVICE services"
+  else
+    dokku_log_info1_quiet "$NEO4J_PLUGIN_SERVICE services:"
+    for SERVICE in $SERVICES; do
+      dokku_log_verbose "$SERVICE, $(service_version "$SERVICE") $(service_status "$SERVICE")$(service_exposed_ports "$SERVICE")"
+    done
+  fi
+}
+
+service_exposed_ports() {
+  local SERVICE="$1"
+  local SERVICE_ROOT="$NEO4J_PLUGIN_DATA_ROOT/$SERVICE"
+  local PORT_FILE="$SERVICE_ROOT/PORT"
+  [[ ! -f $PORT_FILE ]] && return 0
+  local PORTS=($(cat "$PORT_FILE"))
+  echo -n ", exposed ports:"
+  for (( i=0; i < ${#NEO4J_PLUGIN_DATASTORE_PORTS[@]}; i++ )); do
+    echo -n " ${NEO4J_PLUGIN_DATASTORE_PORTS[i]}->${PORTS[i]}"
+  done
+  echo ""
+}
+
+service_link() {
+  local APP="$2"
+  local SERVICE="$1"
+  local SERVICE_ROOT="$NEO4J_PLUGIN_DATA_ROOT/$SERVICE"
+  local LINKS_FILE="$SERVICE_ROOT/LINKS"
+
+  mkdir -p "$SERVICE_ROOT" || dokku_log_fail "Unable to create service directory"
+  touch "$LINKS_FILE"
+  echo "$APP" >> "$LINKS_FILE"
+  sort "$LINKS_FILE" -u -o "$LINKS_FILE"
+  dokku_log_info1 "Restarting app $APP"
+  dokku ps:restart "$APP"
+}
+
+service_logs() {
+  local SERVICE="$1"
+  local SERVICE_ROOT="$NEO4J_PLUGIN_DATA_ROOT/$SERVICE"
+  local ID=$(cat "$SERVICE_ROOT/ID")
+
+  if [[ $2 == "-t" ]]; then
+    DOKKU_LOGS_ARGS="--follow"
+  else
+    DOKKU_LOGS_ARGS="--tail 100"
+  fi
+
+  docker logs $DOKKU_LOGS_ARGS "$ID"
+}
+
+service_set_alias() {
+  local SERVICE="$1"
+  local SERVICE_ROOT="$NEO4J_PLUGIN_DATA_ROOT/$SERVICE"
+  local ALIAS_FILE="$SERVICE_ROOT/ALIAS"
+
+  mkdir -p "$SERVICE_ROOT" || dokku_log_fail "Unable to create service directory"
+  touch "$ALIAS_FILE"
+  echo $2 | awk '{print toupper($0)}' > "$ALIAS_FILE"
+}
+
+service_status() {
+  local SERVICE="$1"
+  local SERVICE_ROOT="$NEO4J_PLUGIN_DATA_ROOT/$SERVICE"
+  local ID="$(cat "$SERVICE_ROOT/ID")"
+
+  is_container_status "$ID" "Dead" && echo "(dead)" && return 0
+  is_container_status "$ID" "OOMKilled" && echo "(oomkilled)" && return 0
+  is_container_status "$ID" "Paused" && echo "(paused)" && return 0
+  is_container_status "$ID" "Restarting" && echo "(restarting)" && return 0
+  is_container_status "$ID" "Running" && echo "(running)" && return 0
+  echo "(stopped)" && return 0
+}
+
+service_port_expose() {
+  service_start "$1" "true"
+  service_port_unpause "$1" "true"
+}
+
+service_port_pause() {
+  local SERVICE="$1"
+  local SERVICE_ROOT="$NEO4J_PLUGIN_DATA_ROOT/$SERVICE"
+  local EXPOSED_NAME="$(get_service_name "$SERVICE").ambassador"
+  local PORT_FILE="$SERVICE_ROOT/PORT"
+  local LOG_FAIL="$2"
+
+  if [[ "$LOG_FAIL" == "true" ]]; then
+    [[ ! -f "$PORT_FILE" ]] && dokku_log_fail "Service not exposed"
+  else
+    [[ ! -f "$PORT_FILE" ]] && return 0
+  fi
+
+  docker stop "$EXPOSED_NAME" > /dev/null
+  docker rm "$EXPOSED_NAME" > /dev/null
+  if [[ "$LOG_FAIL" == "true" ]]; then
+    dokku_log_info1 "Service $SERVICE unexposed"
+  fi
+}
+
+service_port_unexpose() {
+  local SERVICE="$1"
+  local SERVICE_ROOT="$NEO4J_PLUGIN_DATA_ROOT/$SERVICE"
+  local PORT_FILE="$SERVICE_ROOT/PORT"
+  service_port_pause "$SERVICE" "true"
+  rm -rf "$PORT_FILE"
+}
+
+service_port_unpause() {
+  local SERVICE="$1"
+  local SERVICE_ROOT="$NEO4J_PLUGIN_DATA_ROOT/$SERVICE"
+  local SERVICE_NAME=$(get_service_name "$SERVICE")
+  local EXPOSED_NAME="${SERVICE_NAME}.ambassador"
+  local PORT_FILE="$SERVICE_ROOT/PORT"
+  local LOG_FAIL="$2"
+  local PORTS=($(get_random_ports ${#NEO4J_PLUGIN_DATASTORE_PORTS[@]}))
+  local ID=$(cat "$SERVICE_ROOT/ID")
+
+  [[ "${#PORTS[@]}" != "${#NEO4J_PLUGIN_DATASTORE_PORTS[@]}" ]] && dokku_log_fail "${#NEO4J_PLUGIN_DATASTORE_PORTS[@]} ports to be exposed need to be provided"
+
+  if [[ "$LOG_FAIL" == "true" ]]; then
+    [[ -f "$PORT_FILE" ]] && PORTS=($(cat "$PORT_FILE")) && dokku_log_fail "Service $SERVICE already exposed on ports ${PORTS[*]}"
+
+  else
+    [[ ! -f "$PORT_FILE" ]] && return 0
+    PORTS=($(cat "$PORT_FILE"))
+  fi
+
+  echo "${PORTS[@]}" > "$PORT_FILE"
+  docker run -d --link "$SERVICE_NAME:neo4j" --name "$EXPOSED_NAME" $(docker_ports_options "${PORTS[@]}") --restart always --label dokku=ambassador --label dokku.ambassador=neo4j svendowideit/ambassador > /dev/null
+  if [[ "$LOG_FAIL" == "true" ]]; then
+    dokku_log_info1 "Service $SERVICE exposed on ports ${PORTS[*]}"
+  fi
+}
+
+docker_ports_options() {
+  local PORTS=("$@")
+  for (( i=0; i < ${#NEO4J_PLUGIN_DATASTORE_PORTS[@]}; i++ )); do
+    echo -n "-p ${PORTS[i]}:${NEO4J_PLUGIN_DATASTORE_PORTS[i]} "
+  done
+}
+
+service_start() {
+  local SERVICE="$1"
+  local QUIET="$2"
+  local SERVICE_ROOT="$NEO4J_PLUGIN_DATA_ROOT/$SERVICE"
+  local SERVICE_NAME=$(get_service_name "$SERVICE")
+  local ID=$(docker ps -f status=running | grep "$SERVICE_NAME" | awk '{print $1}') || true
+  if [[ -n $ID ]]; then
+    [[ -z $QUIET ]] && dokku_log_warn "Service is already started"
+    return 0
+  fi
+
+  dokku_log_info1_quiet "Starting container"
+  local PREVIOUS_ID=$(docker ps -f status=exited | grep "$SERVICE_NAME" | awk '{print $1}') || true
+  if [[ -n $PREVIOUS_ID ]]; then
+    docker start "$PREVIOUS_ID" > /dev/null
+    dokku_log_verbose_quiet "Waiting for container to be ready"
+    docker run --rm --link "$SERVICE_NAME:$NEO4J_PLUGIN_COMMAND_PREFIX" aanand/wait
+    service_port_unpause "$SERVICE"
+    dokku_log_info2 "Container started: $SERVICE"
+  else
+    dokku_log_verbose_quiet "No container exists for $SERVICE"
+  fi
+}
+
+service_stop() {
+  local SERVICE="$1"
+  local SERVICE_ROOT="$NEO4J_PLUGIN_DATA_ROOT/$SERVICE";
+  local SERVICE_NAME=$(get_service_name "$SERVICE")
+  local ID=$(docker ps -f status=running | grep "$SERVICE_NAME" | awk '{print $1}') || true
+  [[ -z $ID ]] && dokku_log_warn "Service is already stopped" && return 0
+
+  if [[ -n $ID ]]; then
+    dokku_log_info1_quiet "Stopping container"
+    docker stop "$SERVICE_NAME" > /dev/null
+    service_port_pause "$SERVICE"
+    dokku_log_info2 "Container stopped"
+  else
+    dokku_log_verbose_quiet "No container exists for $SERVICE"
+  fi
+}
+
+service_unlink() {
+  local APP="$2"
+  local SERVICE="$1"
+  local SERVICE_ROOT="$NEO4J_PLUGIN_DATA_ROOT/$SERVICE"
+  local LINKS_FILE="$SERVICE_ROOT/LINKS"
+
+  mkdir -p "$SERVICE_ROOT" || dokku_log_fail "Unable to create service directory"
+  touch "$LINKS_FILE"
+  sed -i "/^$APP\$/d" "$LINKS_FILE"
+  sort "$LINKS_FILE" -u -o "$LINKS_FILE"
+
+  dokku_log_info1 "Restarting app $APP"
+  dokku ps:restart "$APP"
+}
+
+service_url() {
+  local SERVICE="$1"
+  local SERVICE_ROOT="$NEO4J_PLUGIN_DATA_ROOT/$SERVICE"
+
+  local ID="$(cat "$SERVICE_ROOT/ID")"
+  local IP="$(get_container_ip "$ID")"
+  echo "$NEO4J_PLUGIN_SCHEME://$IP:${NEO4J_PLUGIN_DATASTORE_PORTS[0]}"
+}
+
+service_edition() {
+  local SERVICE="$1"
+  local SERVICE_ROOT="$NEO4J_PLUGIN_DATA_ROOT/$SERVICE"
+
+  local EDITION="$(cat "$SERVICE_ROOT/EDITION")"
+  echo "$EDITION"
+}
+
+is_container_status () {
+  local CID=$1
+  local TEMPLATE="{{.State.$2}}"
+  local CONTAINER_STATUS=$(docker inspect -f "$TEMPLATE" "$CID" || true)
+
+  if [[ "$CONTAINER_STATUS" == "true" ]]; then
+    return 0
+  else
+    return 1
+  fi
+}
+
+get_service_name() {
+  local SERVICE="$1"
+  echo "dokku.neo4j.$SERVICE"
+}
+
+service_version() {
+  local SERVICE="$1"
+  local SERVICE_NAME="$(get_service_name "$SERVICE")"
+  docker inspect -f '{{.Config.Image}}' "$SERVICE_NAME"
+}
+
+HMAC-SHA256s(){
+  KEY="$1"
+  DATA="$2"
+  shift 2
+  printf "$DATA" | openssl dgst -binary -sha256 -hmac "$KEY" | od -An -vtx1 | sed 's/[ \n]//g' | sed 'N;s/\n//'
+}
+
+HMAC-SHA256h(){
+  KEY="$1"
+  DATA="$2"
+  shift 2
+  printf "$DATA" | openssl dgst -binary -sha256 -mac HMAC -macopt "hexkey:$KEY" | od -An -vtx1 | sed 's/[ \n]//g' | sed 'N;s/\n//'
+}
+
+s3_archive_backup_file() {
+  local FILE="$1"
+  local S3_COORDINATES="$2"
+  local SERVICE="$3"
+  local BACKUP_NAME="$4"
+
+  source "$S3_COORDINATES"
+
+  if [ -n "$S3_KEY" ] && [ -n "$S3_SECRET" ] && [ -n "$S3_BUCKET" ] && [ -n "$S3_REGION" ]; then
+
+      local CONTENT_TYPE="application/octet-stream"
+
+      if [[ -n "$S3_PREFIX" ]]; then
+        local KEY="$S3_PREFIX/$BACKUP_NAME"
+      else
+        local KEY="$BACKUP_NAME"
+      fi
+
+      local REQUEST_TIME=$(date +"%Y%m%dT%H%M%SZ")
+      local REQUEST_DATE=$(printf "${REQUEST_TIME}" | cut -c 1-8)
+      local AWS4SECRET="AWS4"$S3_SECRET
+      local ALGORITHM="AWS4-HMAC-SHA256"
+      local EXPIRE=$(date --date="+30 minutes" -u +"%Y-%m-%dT%H:%M:%SZ")
+      local ACL="private"
+
+      local POST_POLICY='{"expiration":"'$EXPIRE'","conditions": [{"bucket":"'$S3_BUCKET'" },{"acl":"'$ACL'" },["starts-with", "$key", "'$KEY'"],["eq", "$Content-Type", "application/octet-stream"],{"x-amz-credential":"'$S3_KEY'/'$REQUEST_DATE'/'$S3_REGION'/s3/aws4_request"},{"x-amz-algorithm":"'$ALGORITHM'"},{"x-amz-date":"'$REQUEST_TIME'"}]}'
+
+      UPLOAD_REQUEST=$(printf "$POST_POLICY" | openssl base64 )
+      UPLOAD_REQUEST=$(echo -en $UPLOAD_REQUEST |  sed "s/ //g")
+
+      SIGNATURE=$(HMAC-SHA256h $(HMAC-SHA256h $(HMAC-SHA256h $(HMAC-SHA256h $(HMAC-SHA256s $AWS4SECRET $REQUEST_DATE ) $S3_REGION) "s3") "aws4_request") $UPLOAD_REQUEST)
+
+      curl \
+        -F "key=""$KEY" \
+        -F "acl="$ACL"" \
+        -F "Content-Type="application/octet-stream"" \
+        -F "x-amz-algorithm="$ALGORITHM"" \
+        -F "x-amz-credential="$S3_KEY/$REQUEST_DATE/$S3_REGION/s3/aws4_request"" \
+        -F "x-amz-date="$REQUEST_TIME"" \
+        -F "Policy="$UPLOAD_REQUEST"" \
+        -F "X-Amz-Signature="$SIGNATURE"" \
+        -F "file=@"$FILE http://$S3_BUCKET.s3.amazonaws.com/
+
+      echo
+      dokku_log_info1 "Backup archive transferred to S3"
+      dokku_log_info2 "https://s3.$S3_REGION.amazonaws.com/$S3_BUCKET/$KEY"
+
+    else
+      dokku_log_info1 "S3 coordinates are not valid. Update them via 'dokku neo4j:s3config $SERVICE'"
+      dokku_log_info2 "Aborted S3 upload."
+    fi
+
+
+}
+
+service_backup() {
+  local SERVICE="$1"
+  local SERVICE_ROOT="$NEO4J_PLUGIN_DATA_ROOT/$SERVICE";
+  local SERVICE_NAME=$(get_service_name "$SERVICE")
+  local NOW=$(date -u +"%Y-%m-%dT%H.%M.%SZ")
+  local BACKUP_NAME="($SERVICE)-$NEO4J_PLUGIN_SERVICE-service-backup-$NOW.tar.gz"
+  local ARCHIVE_FILE="$SERVICE_ROOT/lastbackup.tar.gz"
+  local BACKUP_FILE="$SERVICE_ROOT/backups/$BACKUP_NAME"
+  local S3_COORDINATES="$SERVICE_ROOT/S3_COORDINATES"
+  local SERVICE_EDITION=$(service_edition "$SERVICE")
+  local RUNNING_ID=$(docker ps | grep "$SERVICE_NAME" |  awk '{print $1}')
+
+  echo
+  dokku_log_info1 "Executing backup of Neo4j service \"$SERVICE\""
+  mkdir -p "$SERVICE_ROOT/backups" > /dev/null
+
+  if [[ -z $RUNNING_ID ]]; then
+    service_static_dump "$SERVICE" "$ARCHIVE_FILE"
+  else
+
+    if [[ "$SERVICE_EDITION" == "Community" ]]; then
+      dokku_log_warn "WARNING: The service \"$SERVICE\" is an instance of Neo4j Community Edition."
+      dokku_log_warn "To performe the database backup the service will be restarted."
+      dokku_log_warn "Linked dokku apps will be restarted as well."
+      dokku_log_warn "To proceed, type \"$SERVICE\""
+      echo ""
+
+      read -p "> " service_name
+      if [[ "$service_name" != "$SERVICE" ]]; then
+        dokku_log_warn "Confirmation did not match $SERVICE. Aborted."
+        exit 1
+      fi
+      service_static_dump "$SERVICE" "$ARCHIVE_FILE"
+      service_start "$SERVICE"
+      restart_linked_apps "$SERVICE"
+    else
+      service_live_dump "$SERVICE" "$ARCHIVE_FILE" > /dev/null
+    fi
+
+  fi
+
+  cp "$ARCHIVE_FILE" "$BACKUP_FILE"
+  echo
+  dokku_log_info2 "Backup file avaliable at $BACKUP_FILE"
+  echo
+  if [[ -f $S3_COORDINATES ]]; then
+    dokku_log_info1 "Starting file transfer to Amazon S3 of \"$SERVICE\" backup"
+    s3_archive_backup_file "$BACKUP_FILE" "$S3_COORDINATES" "$SERVICE" "$BACKUP_NAME"
+  else
+    dokku_log_info1 "If you want to store your next backups on Amazon S3, setup S3 coordinates via 'dokku neo4j:s3config $SERVICE'"
+  fi
+}
+
+service_dump_database() {
+  local SERVICE="$1"
+  local SERVICE_EDITION=$(service_edition "$SERVICE")
+  local SERVICE_NAME="$(get_service_name "$SERVICE")"
+  local SERVICE_ROOT="$NEO4J_PLUGIN_DATA_ROOT/$SERVICE"
+  local ARCHIVE_FILE="$SERVICE_ROOT/lastbackup.tar.gz"
+  local RUNNING_ID=$(docker ps | grep "$SERVICE_NAME" |  awk '{print $1}')
+
+  if [[ -z $RUNNING_ID ]]; then
+    service_static_dump "$SERVICE" "$ARCHIVE_FILE" > /dev/null
+  else
+
+    if [[ "$SERVICE_EDITION" == "Community" ]]; then
+      service_static_dump "$SERVICE" "$ARCHIVE_FILE" > /dev/null
+      service_start "$SERVICE" > /dev/null
+      restart_linked_apps "$SERVICE" > /dev/null
+    else
+      service_live_dump "$SERVICE" "$ARCHIVE_FILE" > /dev/null
+    fi
+
+  fi
+
+  cat "$ARCHIVE_FILE"
+}
+
+service_static_dump() {
+  local SERVICE="$1"
+  local ARCHIVE_FILE="$2"
+  local SERVICE_ROOT="$NEO4J_PLUGIN_DATA_ROOT/$SERVICE"
+
+  service_stop "$SERVICE"
+  tar --transform "s/^./graph.db/" -czvf "$ARCHIVE_FILE" -C "$SERVICE_ROOT/data/graph.db" . > /dev/null
+  dokku_log_info1 "Backup archive created"
+}
+
+service_live_dump() {
+  local SERVICE="$1"
+  local ARCHIVE_FILE="$2"
+  local SERVICE_NAME="$(get_service_name "$SERVICE")"
+  local SERVICE_TMP_BACKUP="$SERVICE_ROOT/tmp_backup"
+  local SERVICE_VERSION="$(service_version "$SERVICE")"
+  local DOKKU_USER=$(id -u dokku)
+  local DOKKU_GROUP=$(id -g dokku)
+
+  mkdir -p "$SERVICE_TMP_BACKUP/graph.db" > /dev/null
+  docker run -it --link "$SERVICE_NAME:neo4j" -v "$SERVICE_TMP_BACKUP/graph.db:/var/neo4j/backup" --env "DOKKU_USER=$DOKKU_USER" --env "DOKKU_GROUP=$DOKKU_GROUP" --rm "$SERVICE_VERSION" sh -c '/var/neo4j/bin/neo4j-backup -host "$NEO4J_PORT_7474_TCP_ADDR" -to /var/neo4j/backup && chown -R "$DOKKU_USER:$DOKKU_GROUP" /var/neo4j/backup'
+  tar --transform "s/^./graph.db/" -czvf "$ARCHIVE_FILE" -C "$SERVICE_TMP_BACKUP/graph.db" . > /dev/null
+  rm -rf "$SERVICE_TMP_BACKUP"
+}

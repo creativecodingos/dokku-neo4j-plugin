@@ -1,9 +1,10 @@
-#!/bin/bash
+#!/usr/bin/env bash
+set -eo pipefail; [[ $DOKKU_TRACE ]] && set -x
+source "$(dirname "$0")/config"
+source "$(dirname "$0")/functions"
 
-# Build docker image
-docker build -q=true -t creativecoding/neo4j-community github.com/creativecodingos/dokku-neo4j-dockerfiles.git
-docker build -q=true -t creativecoding/neo4j-enterprise github.com/creativecodingos/dokku-neo4j-enterprise-dockerfiles.git
+docker pull svendowideit/ambassador:latest
+docker pull aanand/wait:latest
 
-mkdir -p $DOKKU_ROOT/.neo4j
-chown -R dokku:dokku $DOKKU_ROOT/.neo4j
-echo "include $DOKKU_ROOT/.neo4j/*/nginx.conf;" > /etc/nginx/conf.d/zz-dokku-neo4j-plugin.conf
+mkdir -p "$NEO4J_PLUGIN_DATA_ROOT" || echo "Failed to create $NEO4J_PLUGIN_SERVICE directory"
+chown dokku:dokku "$NEO4J_PLUGIN_DATA_ROOT"

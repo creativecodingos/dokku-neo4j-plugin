@@ -1,598 +1,333 @@
 #!/usr/bin/env bash
-#set -eo pipefail; [[ $DOKKU_TRACE ]] && set -x
-set -e;
+set -eo pipefail; [[ $DOKKU_TRACE ]] && set -x
 
-# Check if name is specified
-if [[ $1 == neo4j:* ]]; then
-    if [[ -z $2 ]]; then
-        echo "You must specify an app name"
-        exit 1
-    else
-        APP="$2"
-        # Check if app exists with the same name
-        if [[ -d "$DOKKU_ROOT/$APP" ]]; then
-            APP_EXISTS=true
-        else
-            APP_EXISTS=false
-        fi
-    fi
+PLUGIN_BASE_PATH="$PLUGIN_PATH"
+if [[ -n $DOKKU_API_VERSION ]]; then
+  PLUGIN_BASE_PATH="$PLUGIN_ENABLED_PATH"
+fi
+source "$PLUGIN_BASE_PATH/common/functions"
+source "$(dirname "$0")/functions"
+source "$(dirname "$0")/config"
+
+if [[ $1 == $NEO4J_PLUGIN_COMMAND_PREFIX:* ]]; then
+  if [[ ! -d $NEO4J_PLUGIN_DATA_ROOT ]]; then
+    dokku_log_fail "$NEO4J_PLUGIN_SERVICE: Please run: sudo dokku plugin:install"
+  fi
 fi
 
 case "$1" in
-
-  neo4j:create)
-    NEO4J_IMAGE=neo4j/$APP
-    # Check if Redis container is installed
-    IMAGE=$(docker images | grep "creativecoding/neo4j-community" |  awk '{print $3}')
-    if [[ -z $IMAGE ]]; then
-        echo "Neo4j Community image not found... Did you run 'dokku plugins-install' ?"
-        exit 1
-    fi
-    # Check if an existing DB volume exists
-    HOST_DIR="$DOKKU_ROOT/.neo4j/$APP"
-    if [[ -d $HOST_DIR ]]; then
-        echo
-        echo "-----> Reusing neo4j/$APP database"
-    else
-        mkdir -p $HOST_DIR/graph.db
-        mkdir $HOST_DIR/backups
-    fi
-    VOLUME="$HOST_DIR/graph.db:/var/neo4j/data/graph.db"
-    # Stop existing container with the same Neo4j
-    ID=$(docker ps | grep "$NEO4J_IMAGE":latest |  awk '{print $1}')
-    if [[ ! -z "$ID" ]]; then
-        docker stop $ID > /dev/null
-        docker rm $ID > /dev/null
-        docker rmi $NEO4J_IMAGE:latest > /dev/null
-    fi
-    # Fork Neo4j image
-    ID=$(docker run -d creativecoding/neo4j-community /bin/bash "exit 0")
-    docker wait $ID > /dev/null
-    IMAGE=$(docker commit $ID)
-    docker rm $ID > /dev/null
-    docker tag -f $IMAGE $NEO4J_IMAGE
-    # Launch container
-    ID=$(docker run -v $VOLUME -d $NEO4J_IMAGE /bin/start_neo4j.sh)
-    echo "$ID" > $HOST_DIR/CONTAINER
-    echo "community" > $HOST_DIR/VERSION
-    dokku neo4j:info $APP > $HOST_DIR/INFO
-    sleep 4
-    # Link to a potential existing app
-    dokku neo4j:link $APP $APP
-    echo
-    echo "-----> Neo4j container created: $NEO4J_IMAGE"
-    sleep 1
-    
-    NGINX_FILE="$HOST_DIR/nginx.conf"
-    if [[ -f $NGINX_FILE ]]; then
-      dokku neo4j:nginx $APP
-    else
-      dokku neo4j:info $APP
-    fi
-    ;;
-    
-  neo4j:create-enterprise)
-    NEO4J_IMAGE=neo4j/$APP
-    # Check if Redis container is installed
-    IMAGE=$(docker images | grep "creativecoding/neo4j-enterprise" |  awk '{print $3}')
-    if [[ -z $IMAGE ]]; then
-        echo "Neo4j Enterprise image not found... Did you run 'dokku plugins-install' ?"
-        exit 1
-    fi
-    # Check if an existing DB volume exists
-    HOST_DIR="$DOKKU_ROOT/.neo4j/$APP"
-    if [[ -d $HOST_DIR ]]; then
-        echo
-        echo "-----> Reusing neo4j/$APP database"
-    else
-        mkdir -p $HOST_DIR/graph.db
-        mkdir $HOST_DIR/backups
-        mkdir $HOST_DIR/.hotbackup
-    fi
-    VOLUME="$HOST_DIR/graph.db:/var/neo4j/data/graph.db"
-    # Stop existing container with the same Neo4j
-    ID=$(docker ps | grep "$NEO4J_IMAGE":latest |  awk '{print $1}')
-    if [[ ! -z "$ID" ]]; then
-        docker stop $ID > /dev/null
-        docker rm $ID > /dev/null
-        docker rmi $NEO4J_IMAGE:latest > /dev/null
-    fi
-    # Fork Neo4j image
-    ID=$(docker run -d creativecoding/neo4j-enterprise /bin/bash "exit 0")
-    docker wait $ID > /dev/null
-    IMAGE=$(docker commit $ID)
-    docker rm $ID > /dev/null
-    docker tag -f $IMAGE $NEO4J_IMAGE
-    # Launch container
-    ID=$(docker run -v $VOLUME -d $NEO4J_IMAGE /bin/start_neo4j.sh)
-    echo "$ID" > $HOST_DIR/CONTAINER
-    echo "enterprise" > $HOST_DIR/VERSION
-    dokku neo4j:info $APP > $HOST_DIR/INFO
-    sleep 4
-    # Link to a potential existing app
-    dokku neo4j:link $APP $APP
-    echo
-    echo "-----> Neo4j container created: $NEO4J_IMAGE"
-    sleep 1
-    
-    NGINX_FILE="$HOST_DIR/nginx.conf"
-    if [[ -f $NGINX_FILE ]]; then
-      dokku neo4j:nginx $APP
-    else
-      dokku neo4j:info $APP
-    fi
+  $NEO4J_PLUGIN_COMMAND_PREFIX:alias)
+    [[ -z $2 ]] && dokku_log_fail "Please specify a name for the service"
+    [[ -z $3 ]] && dokku_log_fail "Please specify an alias for the service"
+    verify_service_name "$2"
+    service_set_alias "$2" "$3"
     ;;
 
-  neo4j:delete)
-    NEO4J_IMAGE=neo4j/$APP
-    # Stop the container
-    ID=$(docker ps -a | grep "$NEO4J_IMAGE":latest |  awk '{print $1}')
-    RUNNING_ID=$(docker ps | grep "$NEO4J_IMAGE":latest |  awk '{print $1}')
-    if [[ ! -z "$RUNNING_ID" ]]; then
-      echo 
-      echo "-----> Stopping $NEO4J_IMAGE container"
-      echo 
-      docker wait $(docker stop $ID) > /dev/null
-    fi
-    if [[ ! -z $ID ]]; then
-      docker rm $ID > /dev/null
-      echo 
-      echo "-----> Removed $NEO4J_IMAGE container"
-      echo 
-    fi
-    # Remove image
-    IMAGE=$(docker images | grep "$NEO4J_IMAGE " |  awk '{print $1}')
-    if [[ ! -z $IMAGE ]]; then
-        docker rmi $IMAGE > /dev/null
-    fi
-    # Remove persistent volume
-    HOST_DIR="$DOKKU_ROOT/.neo4j/$APP"
-    if [[ -d $HOST_DIR ]]; then
-      VOLUME="$HOST_DIR/graph.db:/var/neo4j/data/graph.db"
-      TO_REMOVE=$(docker run -v $VOLUME -d creativecoding/neo4j-community /bin/purge_data.sh);
-      docker wait $TO_REMOVE > /dev/null
-      docker rm $TO_REMOVE > /dev/null
-      rm -rf $HOST_DIR
+  $NEO4J_PLUGIN_COMMAND_PREFIX:create)
+    [[ -z $2 ]] && dokku_log_fail "Please specify a name for the service"
+    [[ ! -d "$NEO4J_PLUGIN_DATA_ROOT/$2" ]] || dokku_log_fail "$NEO4J_PLUGIN_SERVICE service $2 already exists"
+    SERVICE="$2"; SERVICE_ROOT="$NEO4J_PLUGIN_DATA_ROOT/$SERVICE"; LINKS_FILE="$SERVICE_ROOT/LINKS"
+
+    ensure_docker_images
+
+    mkdir -p "$SERVICE_ROOT" || dokku_log_fail "Unable to create service directory"
+    mkdir -p "$SERVICE_ROOT/data" || dokku_log_fail "Unable to create service data directory"
+    mkdir -p "$SERVICE_ROOT/backups" || dokku_log_fail "Unable to create service backups directory"
+    touch "$LINKS_FILE"
+
+    dokku_log_info1 "Starting container"
+    SERVICE_NAME=$(get_service_name "$SERVICE")
+    ID=$(docker run --name "$SERVICE_NAME" -v "$SERVICE_ROOT/data:/var/neo4j/data" -d --restart always --label dokku=service --label dokku.service=neo4j "$NEO4J_PLUGIN_IMAGE_COMMUNITY:$PLUGIN_IMAGE_VERSION")
+    echo "$ID" > "$SERVICE_ROOT/ID"
+    echo "Community" > "$SERVICE_ROOT/EDITION"
+
+    dokku_log_verbose_quiet "Waiting for container to be ready"
+    docker run --rm --link "$SERVICE_NAME:$NEO4J_PLUGIN_COMMAND_PREFIX" aanand/wait
+
+    dokku_log_info2 "$NEO4J_PLUGIN_SERVICE container created: $SERVICE"
+    dokku "$NEO4J_PLUGIN_COMMAND_PREFIX:info" "$SERVICE"
+    ;;
+
+  $NEO4J_PLUGIN_COMMAND_PREFIX:create-enterprise)
+    [[ -z $2 ]] && dokku_log_fail "Please specify a name for the service"
+    [[ ! -d "$NEO4J_PLUGIN_DATA_ROOT/$2" ]] || dokku_log_fail "$NEO4J_PLUGIN_SERVICE service $2 already exists"
+    SERVICE="$2"; SERVICE_ROOT="$NEO4J_PLUGIN_DATA_ROOT/$SERVICE"; LINKS_FILE="$SERVICE_ROOT/LINKS"
+
+    ensure_docker_images
+
+    mkdir -p "$SERVICE_ROOT" || dokku_log_fail "Unable to create service directory"
+    mkdir -p "$SERVICE_ROOT/data" || dokku_log_fail "Unable to create service data directory"
+    mkdir -p "$SERVICE_ROOT/backups" || dokku_log_fail "Unable to create service backups directory"
+    touch "$LINKS_FILE"
+
+    dokku_log_info1 "Starting container"
+    SERVICE_NAME=$(get_service_name "$SERVICE")
+    ID=$(docker run --name "$SERVICE_NAME" -v "$SERVICE_ROOT/data:/var/neo4j/data" -d --restart always --label dokku=service --label dokku.service=neo4j "$NEO4J_NEO4J_PLUGIN_IMAGE_VERSION:$PLUGIN_IMAGE_VERSION")
+    echo "$ID" > "$SERVICE_ROOT/ID"
+    echo "Enterprise" > "$SERVICE_ROOT/EDITION"
+
+    dokku_log_verbose_quiet "Waiting for container to be ready"
+    docker run --rm --link "$SERVICE_NAME:$NEO4J_PLUGIN_COMMAND_PREFIX" aanand/wait
+
+    dokku_log_info2 "$NEO4J_PLUGIN_SERVICE container created: $SERVICE"
+    dokku "$NEO4J_PLUGIN_COMMAND_PREFIX:info" "$SERVICE"
+    ;;
+
+  $NEO4J_PLUGIN_COMMAND_PREFIX:destroy)
+    [[ -z $2 ]] && dokku_log_fail "Please specify a name for the service"
+    verify_service_name "$2"
+    SERVICE="$2"; SERVICE_ROOT="$NEO4J_PLUGIN_DATA_ROOT/$SERVICE"; LINKS_FILE="$SERVICE_ROOT/LINKS"
+
+    [[ -s "$LINKS_FILE" ]] && dokku_log_fail "Cannot delete linked service"
+
+    [[ "$3" == "force" ]] && DOKKU_APPS_FORCE_DELETE=1
+    if [[ -z "$DOKKU_APPS_FORCE_DELETE" ]]; then
+      dokku_log_warn "WARNING: Potentially Destructive Action"
+      dokku_log_warn "This command will destroy $SERVICE $NEO4J_PLUGIN_SERVICE service."
+      dokku_log_warn "To proceed, type \"$SERVICE\""
       echo ""
-      echo "-----> Removed $NEO4J_IMAGE dokku host folder"
-      echo ""
-    fi
-    echo
-    echo "=====> $NEO4J_IMAGE has been deleted"
-    echo
-    ;;
 
-  neo4j:info)
-    NEO4J_IMAGE=neo4j/$APP
-    HOST_DIR="$DOKKU_ROOT/.neo4j/$APP"
-    ID=$(docker ps -a | grep "$NEO4J_IMAGE":latest |  awk '{print $1}')
-    RUNNING_ID=$(docker ps | grep "$NEO4J_IMAGE":latest |  awk '{print $1}')
-    EXPOSED_FILE="$HOST_DIR/EXPOSED"
-    STATUS="unknown"
-    if [[ ! -z "$RUNNING_ID" ]]; then
-      STATUS="running"
+      read -p "> " service_name
+      if [[ "$service_name" != "$SERVICE" ]]; then
+        dokku_log_warn "Confirmation did not match $SERVICE. Aborted."
+        exit 1
+      fi
+    fi
+
+    dokku_log_info1 "Deleting $SERVICE"
+    if [[ -f "$SERVICE_ROOT/ID" ]] && docker ps -aq --no-trunc | grep -q "$(cat "$SERVICE_ROOT/ID")"; then
+      ID=$(cat "$SERVICE_ROOT/ID")
+
+      dokku_log_verbose_quiet "Deleting container data"
+      service_start "$SERVICE"
+      docker exec -it "$ID" chmod -R 777 /var/neo4j/data
+
+      service_stop "$SERVICE"
+
+      dokku_log_verbose_quiet "Removing container"
+      docker rm -v "$ID" > /dev/null
+      sleep 1
     else
-      STATUS="stopped"
+      dokku_log_verbose_quiet "No container exists for $SERVICE"
     fi
-    IP=$(docker inspect $ID | grep IPAddress | awk '{ print $2 }' | tr -d ',"')
-    VERSION_FILE="$DOKKU_ROOT/.neo4j/$APP/VERSION"
-    if [[ -f $VERSION_FILE ]]; then
-        VERSION=$(cat $VERSION_FILE)
+
+    dokku_log_verbose_quiet "Removing data"
+    rm -rf "$SERVICE_ROOT"
+
+    dokku_log_info2 "$NEO4J_PLUGIN_SERVICE container deleted: $SERVICE"
+    ;;
+
+  $NEO4J_PLUGIN_COMMAND_PREFIX:link)
+    [[ -z $2 ]] && dokku_log_fail "Please specify a name for the service"
+    [[ -z $3 ]] && dokku_log_fail "Please specify an app to run the command on"
+    verify_app_name "$3"
+    verify_service_name "$2"
+    service_link "$2" "$3"
+    ;;
+
+  $NEO4J_PLUGIN_COMMAND_PREFIX:unlink)
+    [[ -z $2 ]] && dokku_log_fail "Please specify a name for the service"
+    [[ -z $3 ]] && dokku_log_fail "Please specify an app to run the command on"
+    verify_app_name "$3"
+    verify_service_name "$2"
+    service_unlink "$2" "$3"
+    ;;
+
+  $NEO4J_PLUGIN_COMMAND_PREFIX:export)
+    [[ -z $2 ]] && dokku_log_fail "Please specify a name for the service"
+    verify_service_name "$2"
+    SERVICE="$2"; SERVICE_ROOT="$NEO4J_PLUGIN_DATA_ROOT/$SERVICE";
+    service_dump_database "$SERVICE" "force"
+    ;;
+
+  $NEO4J_PLUGIN_COMMAND_PREFIX:backup)
+    [[ -z $2 ]] && dokku_log_fail "Please specify a name for the service"
+    verify_service_name "$2"
+    SERVICE="$2";
+    service_backup "$SERVICE"
+    ;;
+
+  $NEO4J_PLUGIN_COMMAND_PREFIX:import)
+    [[ -z $2 ]] && dokku_log_fail "Please specify a name for the service"
+    verify_service_name "$2"
+    SERVICE="$2"; SERVICE_ROOT="$NEO4J_PLUGIN_DATA_ROOT/$SERVICE"
+    SERVICE_TMP="$SERVICE_ROOT/tmp_import"
+    SERVICE_NAME=$(get_service_name "$SERVICE")
+    SERVICE_VERSION="$(service_version "$SERVICE")"
+    SERVICE_STATUS="$(service_status "$SERVICE")"
+
+    if [[ -t 0 ]]; then
+      dokku_log_fail "No data provided on stdin."
+    fi
+    mkdir -p "$SERVICE_TMP" > /dev/null
+    service_stop "$SERVICE" > /dev/null
+    cat > "$SERVICE_TMP/dump.tar.gz"
+    docker run -t --rm  -v "$SERVICE_TMP:/var/neo4j/tmp" -v "$SERVICE_ROOT/data:/var/neo4j/data" "$SERVICE_VERSION" sh -c 'rm -rf /var/neo4j/data/graph.db && tar -xzvf /var/neo4j/tmp/dump.tar.gz -C "/var/neo4j/data"' > /dev/null
+    rm -rf "$SERVICE_TMP" > /dev/null
+    if [[ "$SERVICE_STATUS" == "(running)" ]]; then
+      service_start "$SERVICE"
+      dokku_log_info1 "Please call dokku ps:restart on all linked apps"
+      dokku_log_info1 "$(cat $SERVICE_ROOT/LINKS)"
+    fi
+    ;;
+
+  $NEO4J_PLUGIN_COMMAND_PREFIX:logs)
+    [[ -z $2 ]] && dokku_log_fail "Please specify a name for the service"
+    verify_service_name "$2"
+    service_logs "$2" "$3"
+    ;;
+
+  $NEO4J_PLUGIN_COMMAND_PREFIX:start)
+    [[ -z $2 ]] && dokku_log_fail "Please specify a name for the service"
+    verify_service_name "$2"
+    service_start "$2"
+    ;;
+
+  $NEO4J_PLUGIN_COMMAND_PREFIX:stop)
+    [[ -z $2 ]] && dokku_log_fail "Please specify a name for the service"
+    verify_service_name "$2"
+    service_stop "$2"
+    ;;
+
+  $NEO4J_PLUGIN_COMMAND_PREFIX:restart)
+    [[ -z $2 ]] && dokku_log_fail "Please specify a name for the service"
+    verify_service_name "$2"
+    service_stop "$2"
+    service_start "$2"
+    propose_linked_apps_restarting "$2"
+    ;;
+
+  $NEO4J_PLUGIN_COMMAND_PREFIX:connect)
+    [[ -z $2 ]] && dokku_log_fail "Please specify a name for the service"
+    verify_service_name "$2"
+    SERVICE="$2"; SERVICE_ROOT="$NEO4J_PLUGIN_DATA_ROOT/$SERVICE"
+    SERVICE_NAME=$(get_service_name "$SERVICE")
+    EDITION=$(service_edition "$SERVICE")
+
+    ensure_docker_images
+
+    if [[ "$EDITION" == "Community" ]]; then
+      PLUGIN_IMAGE=$NEO4J_PLUGIN_IMAGE_COMMUNITY;
     else
-      VERSION="unknown"
+      PLUGIN_IMAGE=$NEO4J_NEO4J_PLUGIN_IMAGE_VERSION;
     fi
+
+    # shellcheck disable=SC2016
+    docker run -it --link "$SERVICE_NAME:neo4j" --rm "$PLUGIN_IMAGE:$NEO4J_IMAGE_VERSION" sh -c 'exec /var/neo4j/bin/neo4j-shell -host "$NEO4J_PORT_7474_TCP_ADDR"'
+    ;;
+
+  $NEO4J_PLUGIN_COMMAND_PREFIX:info)
+    [[ -z $2 ]] && dokku_log_fail "Please specify a name for the service"
+    verify_service_name "$2"
+    service_info "$2"
+    ;;
+
+  $NEO4J_PLUGIN_COMMAND_PREFIX:list)
+    service_list
+    ;;
+
+  $NEO4J_PLUGIN_COMMAND_PREFIX:clone)
+    [[ -z $2 ]] && dokku_log_fail "Please specify a name for the service"
+    [[ -z $3 ]] && dokku_log_fail "Please specify a name for the new service"
+    verify_service_name "$2"
+    SERVICE="$2"
+    NEW_SERVICE="$3"
+    EDITION=$(service_edition "$SERVICE")
+
+    if [[ "$EDITION" == "Community" ]]; then
+      dokku "$NEO4J_PLUGIN_COMMAND_PREFIX:create" "$NEW_SERVICE"
+    else
+      dokku "$NEO4J_PLUGIN_COMMAND_PREFIX:create-enterprise" "$NEW_SERVICE"
+    fi
+
+    dokku_log_info1 "Copying data from $SERVICE to $NEW_SERVICE"
+    dokku "$NEO4J_PLUGIN_COMMAND_PREFIX:export" "$SERVICE" | dokku "$NEO4J_PLUGIN_COMMAND_PREFIX:import" "$NEW_SERVICE" > /dev/null 2>&1 || true
+    dokku_log_info1 "Done"
+    ;;
+
+  $NEO4J_PLUGIN_COMMAND_PREFIX:expose)
+    [[ -z $2 ]] && dokku_log_fail "Please specify a name for the service"
+    verify_service_name "$2"
+    service_port_expose "$2"
+    ;;
+
+  $NEO4J_PLUGIN_COMMAND_PREFIX:unexpose)
+    [[ -z $2 ]] && dokku_log_fail "Please specify a name for the service"
+    verify_service_name "$2"
+    service_port_unexpose "$2"
+    ;;
+
+  $NEO4J_PLUGIN_COMMAND_PREFIX:s3config)
+    [[ -z $2 ]] && dokku_log_fail "Please specify a name for the service"
+    SERVICE="$2"; SERVICE_ROOT="$NEO4J_PLUGIN_DATA_ROOT/$SERVICE"; S3_COORDINATES="$SERVICE_ROOT/S3_COORDINATES"
+
+    touch "$S3_COORDINATES"
+
     echo
-    echo "=====> Info of $NEO4J_IMAGE:"
+    dokku_log_info1 "Configure S3 coordinates for the service $SERVICE"
     echo
-    echo "       Version: $VERSION"
-    echo "       Status: $STATUS"
-    if [ "$STATUS" = "running" ]; then
-      echo "       Container IP: $IP"
-      echo "       REST port: 7474"
-      if [ "$VERSION" = "enterprise" ]; then
-      echo "       Hot Backup port: 6362"
-      fi
-      if [[ -f "$HOST_DIR/nginx.conf" ]]; then
-      VHOST=$(cat "$HOST_DIR/VHOST")
-      echo
-      echo "   *** Database accessible at http://$VHOST ***"        
-      fi
-      if [[ -f $EXPOSED_FILE ]]; then
-      EXPOSED_PORT=$(cat $EXPOSED_FILE)
-      echo
-      echo "       #"
-      echo "       #  WARNING!!"
-      echo "       #"
-      echo "       #  Database REST access is exposed on docker host on port $EXPOSED_PORT"
-      echo "       #"
-      echo "       #  You can run"
-      echo "       #  dokku neo4j:hide $APP"
-      echo "       #  to unbind the database REST port from the docker host"
-      echo "       #"
-      fi
-    fi    
+    read -p "AWS Access Key ID > " S3_KEY
+    read -p "AWS Secret Access Key > " S3_SECRET
+    read -p "S3 Region > " S3_REGION
+    read -p "S3 Bucket > " S3_BUCKET
+    read -p "Files keys prefix (without leading and trailing /) > " S3_PREFIX
+
     echo
-    ;;
+    read -p "Do you want to proceed? [yes] (type 'n' to abort) > " ABORT
+    if [[ "$ABORT" != "n" ]]; then
 
-  neo4j:link)
-    if $APP_EXISTS; then
-        # Check argument
-        if [[ -z $3 ]]; then
-            echo "You must specify a container name"
-            exit 1
-        fi
-        NEO4J_IMAGE="neo4j/$3"
-        ID=$(docker ps -a | grep "$NEO4J_IMAGE":latest |  awk '{print $1}')
-        if [[ -n "$ID" ]]; then
-            IP=$(docker inspect $ID | grep IPAddress | awk '{ print $2 }' | tr -d ',"')
-            # it seems like the dokku way of doing things is using dokku config:set to set environment variables, 
-            # eg, not setting them via modifying the app's ENV file
-            echo
-            echo "-----> Linking application [$APP] to $NEO4J_IMAGE container"
-            dokku config:set $APP "NEO4J_URL=http://$IP:7474"
-            echo
-            echo "-----> Application [$APP] linked to $NEO4J_IMAGE container"
-        fi
+      echo "#!/usr/bin/env bash" > "$S3_COORDINATES"
+      echo "export S3_KEY=$S3_KEY" >> "$S3_COORDINATES"
+      echo "export S3_SECRET=$S3_SECRET" >> "$S3_COORDINATES"
+      echo "export S3_REGION=$S3_REGION" >> "$S3_COORDINATES"
+      echo "export S3_BUCKET=$S3_BUCKET" >> "$S3_COORDINATES"
+
+      if [ -n "$S3_PREFIX" ]; then
+        echo "export S3_PREFIX=$S3_PREFIX" >> "$S3_COORDINATES"
+      fi
+
+      echo
+      dokku_log_info2 "S3 coordinates saved"
+    else
+      echo
+      dokku_log_info2 "Aborted"
     fi
-    ;;
-    
-  neo4j:backup)
-    NEO4J_IMAGE=neo4j/$APP
-    HOST_DIR="$DOKKU_ROOT/.neo4j/$APP"
-    S3_FILE="$HOST_DIR/S3"
-    VERSION_FILE="$HOST_DIR/VERSION"
-    NOW=$(date -u +"%Y-%m-%dT%H.%M.%SZ")
-    
-    HMAC-SHA256s(){
-     KEY="$1"
-     DATA="$2"
-     shift 2
-     printf "$DATA" | openssl dgst -binary -sha256 -hmac "$KEY" | od -An -vtx1 | sed 's/[ \n]//g' | sed 'N;s/\n//'
-    }
 
-    HMAC-SHA256h(){
-     KEY="$1"
-     DATA="$2"
-     shift 2
-     printf "$DATA" | openssl dgst -binary -sha256 -mac HMAC -macopt "hexkey:$KEY" | od -An -vtx1 | sed 's/[ \n]//g' | sed 'N;s/\n//'
-    }
-    
-    s3_backup() {
-      
-      source "$S3_FILE"
-      
-      if [ -n "$S3_KEY" ] && [ -n "$S3_SECRET" ] && [ -n "$BUCKET" ] && [ -n "$REGION" ]; then
-        echo
-        echo "-----> Starting file transfer of $1"
-        echo
-        
-        CONTENT_TYPE="application/octet-stream"
-        
-        FILE="$2"
-        if [[ -n "$PREFIX" ]]; then
-          KEY="$PREFIX/$FILE"
-        else
-          KEY="$FILE"
-        fi
-        
-        
-        REQUEST_TIME=$(date +"%Y%m%dT%H%M%SZ")
-        REQUEST_DATE=$(printf "${REQUEST_TIME}" | cut -c 1-8)
-        AWS4SECRET="AWS4"$S3_SECRET
-        ALGORITHM="AWS4-HMAC-SHA256"
-        EXPIRE=$(date --date="+30 minutes" -u +"%Y-%m-%dT%H:%M:%SZ")
-        ACL="private"
-        
-        POST_POLICY='{"expiration":"'$EXPIRE'","conditions": [{"bucket":"'$BUCKET'" },{"acl":"'$ACL'" },["starts-with", "$key", "'$KEY'"],["eq", "$Content-Type", "application/octet-stream"],{"x-amz-credential":"'$S3_KEY'/'$REQUEST_DATE'/'$REGION'/s3/aws4_request"},{"x-amz-algorithm":"'$ALGORITHM'"},{"x-amz-date":"'$REQUEST_TIME'"}]}'
-
-        UPLOAD_REQUEST=$(printf "$POST_POLICY" | openssl base64 )
-        UPLOAD_REQUEST=$(echo -en $UPLOAD_REQUEST |  sed "s/ //g")
-
-        SIGNATURE=$(HMAC-SHA256h $(HMAC-SHA256h $(HMAC-SHA256h $(HMAC-SHA256h $(HMAC-SHA256s $AWS4SECRET $REQUEST_DATE ) $REGION) "s3") "aws4_request") $UPLOAD_REQUEST)
-        
-        curl \
-        	-F "key=""$KEY" \
-        	-F "acl="$ACL"" \
-        	-F "Content-Type="application/octet-stream"" \
-        	-F "x-amz-algorithm="$ALGORITHM"" \
-        	-F "x-amz-credential="$S3_KEY/$REQUEST_DATE/$REGION/s3/aws4_request"" \
-        	-F "x-amz-date="$REQUEST_TIME"" \
-        	-F "Policy="$UPLOAD_REQUEST"" \
-        	-F "X-Amz-Signature="$SIGNATURE"" \
-        	-F "file=@"$1 http://$BUCKET.s3.amazonaws.com/
-        
-        echo
-        echo "=====> Backup archive transferred to S3"
-        echo "       https://s3.$REGION.amazonaws.com/$BUCKET/$KEY"
-        echo
-        echo       
-        
-      else
-        echo
-        echo "-----> S3 configuration file is not valid"
-        echo "=====> Aborting S3 upload"
-        echo
-      fi
-    
-    }
-    
-    if [[ -f $VERSION_FILE ]]; then
-      VERSION=$(cat $VERSION_FILE)
-      
-      ID=$(docker ps -a | grep "$NEO4J_IMAGE":latest |  awk '{print $1}')
-      RUNNING_ID=$(docker ps | grep "$NEO4J_IMAGE":latest |  awk '{print $1}')
-      IP=$(docker inspect $ID | grep IPAddress | awk '{ print $2 }' | tr -d ',"')
-      
-      DOKKU_USER=$(id -u dokku)
-      DOKKU_GROUP=$(id -g dokku)
-      
-      if [[ ! -z "$RUNNING_ID" ]]; then
-          STATUS="running"
-      else    
-          STATUS="stopped"
-      fi
-      
-      if [ "$VERSION" = "enterprise" -a "$STATUS" = "running" ]; then
-        echo
-        echo "-----> Executing LIVE backup on $NEO4J_IMAGE [$VERSION version]"
-        echo
-        VOLUME="$HOST_DIR/.hotbackup:/var/neo4j/.hotbackup"
-        WORKER=$(docker run -v $VOLUME -d creativecoding/neo4j-enterprise /var/neo4j/bin/neo4j-backup -host $IP -to /var/neo4j/.hotbackup);
-        docker wait $WORKER > /dev/null
-        docker rm $WORKER > /dev/null
-        
-        PERMS_WORKER=$(docker run -v $VOLUME -d creativecoding/neo4j-enterprise chown -R $DOKKU_USER:$DOKKU_GROUP /var/neo4j/.hotbackup)
-        docker wait $PERMS_WORKER > /dev/null
-        docker rm $PERMS_WORKER > /dev/null
-        echo
-        echo "-----> Archiving..."
-        echo
-        ARCHIVE_FILE_NAME=neo4j-$APP-backup-$NOW.tar.gz
-        ARCHIVE_FILE=$HOST_DIR/backups/$ARCHIVE_FILE_NAME
-        tar --transform "s/^./graph.db/" -czvf $ARCHIVE_FILE -C $HOST_DIR/.hotbackup . > /dev/null
-        echo
-        echo "=====> Backup saved into $ARCHIVE_FILE"
-        echo
-        if [[ -f $S3_FILE ]]; then
-          echo
-          echo "-----> Detected S3 configuration file"
-          echo
-          s3_backup $ARCHIVE_FILE $ARCHIVE_FILE_NAME
-        fi        
-        dokku neo4j:info $APP
-      fi
-      
-      if [ "$VERSION" = "community" -o "$STATUS" = "stopped" ]; then
-        echo
-        echo "-----> Executing backup on $NEO4J_IMAGE [$VERSION version]"
-        echo
-        
-        if [ "$STATUS" = "running" ]; then
-          echo
-          echo "-----> Stopping $NEO4J_IMAGE"
-          echo
-          DOWN_START=$(date +%s)
-          docker wait $(docker stop $ID) > /dev/null
-        fi
-        
-        
-        VOLUME="$HOST_DIR/graph.db:/var/neo4j/data/graph.db"
-        PERMS_WORKER=$(docker run -v $VOLUME -d creativecoding/neo4j-community chown -R $DOKKU_USER:$DOKKU_GROUP /var/neo4j/data/graph.db)
-        docker wait $PERMS_WORKER > /dev/null
-        docker rm $PERMS_WORKER > /dev/null
-        
-        echo
-        echo "-----> Archiving..."
-        echo
-        ARCHIVE_FILE_NAME=neo4j-$APP-backup-$NOW.tar.gz
-        ARCHIVE_FILE=$HOST_DIR/backups/$ARCHIVE_FILE_NAME
-        tar -czvf $ARCHIVE_FILE -C $HOST_DIR ./graph.db > /dev/null
-        echo
-        echo "=====> Backup saved into $ARCHIVE_FILE"
-        echo
-        
-        if [ "$STATUS" = "running" ]; then
-          docker start $ID > /dev/null
-          DOWN_END=$(date +%s)
-          DOWN_TOTAL=$(( $DOWN_END - $DOWN_START ))
-          echo "-----> Restarted $NEO4J_IMAGE"
-          echo "-----> Database was down for $DOWN_TOTAL seconds"
-          echo          
-        fi
-        
-        dokku neo4j:link $APP $APP
-        
-        if [[ -f $S3_FILE ]]; then
-          echo
-          echo "-----> Detected S3 configuration file"
-          echo
-          s3_backup $ARCHIVE_FILE $ARCHIVE_FILE_NAME
-        fi  
-        
-        NGINX_FILE="$HOST_DIR/nginx.conf"
-        if [[ -f $NGINX_FILE ]]; then
-          dokku neo4j:nginx $APP
-        else
-          dokku neo4j:info $APP
-        fi
-        
-      fi
-      
-    fi    
-    ;;
-    
-  neo4j:expose)
-    NEO4J_IMAGE=neo4j/$APP
-    HOST_DIR="$DOKKU_ROOT/.neo4j/$APP"
-    VERSION_FILE="$HOST_DIR/VERSION"
-    EXPOSED_FILE="$HOST_DIR/EXPOSED"
-    
-    if [ -f $VERSION_FILE  -a  ! -f $EXPOSED_FILE ]; then
-      VERSION=$(cat $VERSION_FILE)
-      echo
-      echo "-----> Exposing $NEO4J_IMAGE [$VERSION version]"
-      echo
-      
-      ID=$(docker ps -a | grep "$NEO4J_IMAGE":latest |  awk '{print $1}')
-      RUNNING_ID=$(docker ps | grep "$NEO4J_IMAGE":latest |  awk '{print $1}')
-      IP=$(docker inspect $ID | grep IPAddress | awk '{ print $2 }' | tr -d ',"')
-      if [[ ! -z "$RUNNING_ID" ]]; then
-          echo "-----> Stopping $NEO4J_IMAGE container"
-          echo
-          docker wait $(docker stop $ID) > /dev/null
-      fi
-      docker rm $ID > /dev/null
-      
-      VOLUME="$HOST_DIR/graph.db:/var/neo4j/data/graph.db"
-      ID=$(docker run -v $VOLUME -d -p 7474 -p 6362 $NEO4J_IMAGE /bin/start_neo4j.sh)
-      echo "$ID" > $HOST_DIR/CONTAINER
-      EXTERNAL_REST_PORT=$(docker inspect --format='{{(index (index .NetworkSettings.Ports "7474/tcp") 0).HostPort}}' $ID)
-      echo $EXTERNAL_REST_PORT > $EXPOSED_FILE
-      
-      dokku neo4j:link $APP $APP
-      
-      NGINX_FILE="$HOST_DIR/nginx.conf"
-      if [[ -f $NGINX_FILE ]]; then
-        dokku neo4j:nginx $APP
-      else
-        dokku neo4j:info $APP
-      fi
-      
-    fi    
-    ;;
-    
-  neo4j:hide)
-    NEO4J_IMAGE=neo4j/$APP
-    HOST_DIR="$DOKKU_ROOT/.neo4j/$APP"
-    VERSION_FILE="$HOST_DIR/VERSION"
-    EXPOSED_FILE="$HOST_DIR/EXPOSED"
-    
-    if [ -f $VERSION_FILE  -a -f $EXPOSED_FILE ]; then
-      VERSION=$(cat $VERSION_FILE)
-      echo
-      echo "-----> Hiding $NEO4J_IMAGE [$VERSION version]"
-      echo
-      
-      ID=$(docker ps -a | grep "$NEO4J_IMAGE":latest |  awk '{print $1}')
-      RUNNING_ID=$(docker ps | grep "$NEO4J_IMAGE":latest |  awk '{print $1}')
-      IP=$(docker inspect $ID | grep IPAddress | awk '{ print $2 }' | tr -d ',"')
-      
-      if [[ ! -z "$RUNNING_ID" ]]; then
-          echo "-----> Stopping $NEO4J_IMAGE container"
-          echo
-          docker wait $(docker stop $ID) > /dev/null
-      fi
-      docker rm $ID > /dev/null
-      rm $EXPOSED_FILE
-      
-      VOLUME="$HOST_DIR/graph.db:/var/neo4j/data/graph.db"
-      ID=$(docker run -v $VOLUME -d $NEO4J_IMAGE /bin/start_neo4j.sh)
-      echo "$ID" > $HOST_DIR/CONTAINER
-      
-      dokku neo4j:link $APP $APP
-      
-      NGINX_FILE="$HOST_DIR/nginx.conf"
-      if [[ -f $NGINX_FILE ]]; then
-        dokku neo4j:nginx $APP
-      else
-        dokku neo4j:info $APP
-      fi
-      
-    fi
-    
-    ;;
-  
-  neo4j:nginx)
-    NEO4J_IMAGE=neo4j/$APP
-    HOST_DIR="$DOKKU_ROOT/.neo4j/$APP"
-    NGINX_CONF="$HOST_DIR/nginx.conf"
-    
-    ID=$(docker ps -a | grep "$NEO4J_IMAGE":latest |  awk '{print $1}')
-    IP=$(docker inspect $ID | grep IPAddress | awk '{ print $2 }' | tr -d ',"')
-    
-    UPSTREAM="neo4j-$APP"
-    DOKKU_LISTEN_IPV4="${DOKKU_LISTEN_IPV4:-*}"
-    DOKKU_LISTEN_IPV6="${DOKKU_LISTEN_IPV6:-[::]}"
-    DOKKU_VHOST=$(cat $DOKKU_ROOT/VHOST)
-    
-    http_host() {
-    
-      cat <<EOF
-upstream $UPSTREAM { server $IP:7474; }
-server {
-  listen      $DOKKU_LISTEN_IPV6:80;
-  listen      $DOKKU_LISTEN_IPV4:80;
-  server_name $@;
-  
-  location    / {
-    proxy_pass  http://$UPSTREAM;
-EOF
-      if [[ -f "$HOST_DIR/htpasswd" ]]; then
-        cat <<EOF
-    auth_basic "closed website";
-    auth_basic_user_file "$HOST_DIR/htpasswd";
-EOF
-      fi
-      
-      cat <<EOF
-    proxy_http_version 1.1;
-    proxy_set_header Upgrade \$http_upgrade;
-    proxy_set_header Connection "upgrade";
-    proxy_set_header Host \$http_host;
-    proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
-    proxy_set_header X-Forwarded-Proto \$scheme;
-    proxy_set_header X-Request-Start \$msec;
-  }
-}
-EOF
-    
-    }
-    
-    if [[ ! -z $ID ]]; then
-      HOST="neo4j-$APP.$DOKKU_VHOST"
-      HOST_FILE="$HOST_DIR/VHOST"
-      http_host $HOST > $NGINX_CONF
-      echo $HOST > $HOST_FILE
-      echo
-      echo "-----> Composed new nginx.conf file for $NEO4J_IMAGE"
-      echo "       Reloading Nginx"
-      echo
-      sudo /etc/init.d/nginx reload > /dev/null
-      dokku neo4j:info $APP
-    fi    
-    
-    ;;
-  
-  neo4j:nginx-off)
-    NEO4J_IMAGE=neo4j/$APP
-    HOST_DIR="$DOKKU_ROOT/.neo4j/$APP"
-    NGINX_CONF="$HOST_DIR/nginx.conf"
-    
-    if [ -f $NGINX_CONF ]; then
-      echo
-      echo "-----> Remove $NEO4J_IMAGE accessibility through Nginx"
-      echo
-      rm $NGINX_CONF > /dev/null
-      rm $HOST_DIR/VHOST > /dev/null
-      sudo /etc/init.d/nginx reload > /dev/null
-      dokku neo4j:info $APP > $HOST_DIR/INFO
-      dokku neo4j:info $APP
-    fi
     ;;
 
   help)
-    cat && cat<<EOF
-    neo4j:create <n4j>             Create a Neo4j Community container
-    neo4j:create-enterprise <n4j>  Create a Neo4j Enterprise container
-    neo4j:delete <n4j>             Delete specified Neo4j container
-    neo4j:info <n4j>               Display container information
-    neo4j:link <app> <n4j>         Link an app to a Neo4j container
-    neo4j:expose <n4j>             Binds a Neo4j database to a higher port on docker host
-    neo4j:hide <n4j>               Unbinds a Neo4j database
-    neo4j:nginx <n4j>              Makes a database accessible through Nginx
-    neo4j:nginx-off <n4j>          Remove a database accessibility through Nginx 
-    neo4j:backup <n4j>             Backup a Neo4j database
+    HELP=$(cat<<EOF
+    $NEO4J_PLUGIN_COMMAND_PREFIX:alias <name> <alias>, Set an alias for the docker link
+    $NEO4J_PLUGIN_COMMAND_PREFIX:create <name>, Create a $NEO4J_PLUGIN_SERVICE Community service
+    $NEO4J_PLUGIN_COMMAND_PREFIX:create-enterprise <name>, Create a $NEO4J_PLUGIN_SERVICE Enterprise service
+    $NEO4J_PLUGIN_COMMAND_PREFIX:destroy <name>, Delete the $NEO4J_PLUGIN_SERVICE service and stop its container if there are no links left
+    $NEO4J_PLUGIN_COMMAND_PREFIX:link <name> <app>, Link the $NEO4J_PLUGIN_SERVICE service to the app
+    $NEO4J_PLUGIN_COMMAND_PREFIX:unlink <name> <app>, Unlink the $NEO4J_PLUGIN_SERVICE service from the app
+    $NEO4J_PLUGIN_COMMAND_PREFIX:backup <name>, Executes a backup of the $NEO4J_PLUGIN_SERVICE service database.
+    $NEO4J_PLUGIN_COMMAND_PREFIX:s3config <name>, Provide coordinates to store the backup files on Amazon S3
+    $NEO4J_PLUGIN_COMMAND_PREFIX:export <name> > <file>, Export a dump of the $NEO4J_PLUGIN_SERVICE service database
+    $NEO4J_PLUGIN_COMMAND_PREFIX:import <name> < <file>, Import a dump into the $NEO4J_PLUGIN_SERVICE service database
+    $NEO4J_PLUGIN_COMMAND_PREFIX:connect <name>, Connect via neo4j-shell to a $NEO4J_PLUGIN_SERVICE service
+    $NEO4J_PLUGIN_COMMAND_PREFIX:logs <name> [-t], Print the most recent log(s) for this service
+    $NEO4J_PLUGIN_COMMAND_PREFIX:restart <name>, Graceful shutdown and restart of the $NEO4J_PLUGIN_SERVICE service container
+    $NEO4J_PLUGIN_COMMAND_PREFIX:info <name>, Print the connection information
+    $NEO4J_PLUGIN_COMMAND_PREFIX:list, List all $NEO4J_PLUGIN_SERVICE services
+    $NEO4J_PLUGIN_COMMAND_PREFIX:clone <name> <new-name>, Create container <new-name> then copy data from <name> into <new-name>
+    $NEO4J_PLUGIN_COMMAND_PREFIX:expose <name>, Expose a $NEO4J_PLUGIN_SERVICE service on random ports
+    $NEO4J_PLUGIN_COMMAND_PREFIX:unexpose <name>, Unexpose a previously exposed $NEO4J_PLUGIN_SERVICE service
+    $NEO4J_PLUGIN_COMMAND_PREFIX:start <name>, Start a previously stopped $NEO4J_PLUGIN_SERVICE service
+    $NEO4J_PLUGIN_COMMAND_PREFIX:stop <name>, Stop a running $NEO4J_PLUGIN_SERVICE service
 EOF
+)
+    if [[ -n $DOKKU_API_VERSION ]]; then
+      echo "$HELP"
+    else
+      cat && echo "$HELP"
+    fi
+    ;;
+
+  *)
+    exit "$DOKKU_NOT_IMPLEMENTED_EXIT"
     ;;
 
 esac

@@ -1,0 +1,4 @@
+[plugin]
+description = "dokku neo4j service plugin"
+version = "1.0.0"
+[plugin.config]
