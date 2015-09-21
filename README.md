@@ -4,9 +4,6 @@ Neo4j plugin for dokku. Currently defaults to installing Neo4j 2.2.5
 
 Project: https://github.com/progrium/dokku
 
-WIP....
-----------------------
-
 ## installation
 ```
 cd /var/lib/dokku/plugins
