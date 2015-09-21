@@ -40,7 +40,7 @@ neo4j:stop <name>                Stop a running Neo4j service
 ```
 
 # usage
-```
+```bash
 # create a neo4j community edition service named graph
 dokku neo4j:create graph            # Server side
 ssh dokku@server neo4j:create graph # Client side
