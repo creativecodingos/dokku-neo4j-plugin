@@ -292,7 +292,6 @@ case "$1" in
       echo
       dokku_log_info2 "Aborted"
     fi
-
     ;;
 
   help)
@@ -317,6 +316,7 @@ case "$1" in
     $NEO4J_PLUGIN_COMMAND_PREFIX:unexpose <name>, Unexpose a previously exposed $NEO4J_PLUGIN_SERVICE service
     $NEO4J_PLUGIN_COMMAND_PREFIX:start <name>, Start a previously stopped $NEO4J_PLUGIN_SERVICE service
     $NEO4J_PLUGIN_COMMAND_PREFIX:stop <name>, Stop a running $NEO4J_PLUGIN_SERVICE service
+
 EOF
 )
     if [[ -n $DOKKU_API_VERSION ]]; then
