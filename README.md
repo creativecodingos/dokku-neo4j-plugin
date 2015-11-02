@@ -8,9 +8,7 @@ Fork of https://github.com/dokku/dokku-redis
 
 ## installation
 ```
-cd /var/lib/dokku/plugins
-git clone https://github.com/creativecodingos/dokku-neo4j-plugin.git neo4j
-dokku plugins-install
+sudo dokku plugin:install https://github.com/creativecodingos/dokku-neo4j-plugin.git
 ```
 
 
@@ -45,10 +43,10 @@ dokku neo4j:create graph            # Server side
 ssh dokku@server neo4j:create graph # Client side
 
 # create a neo4j enterprise edition service named enterprise-graph
-dokku neo4j:create enterprise-graph
+dokku neo4j:create-enterprise enterprise-graph
 
 # you can also specify the Neo4j version, back to 2.2.1
-export NEO4J_IMAGE_VERSION="2.2.3"
+export NEO4J_IMAGE_VERSION="2.2.5"
 dokku neo4j:create graph
 
 # get service information as follows
@@ -56,9 +54,8 @@ dokku neo4j:info graph
 
 # lets assume the ip of our neo4j service is 172.17.0.1
 
-# a neo4j service can be linked to a
-# container this will use native docker
-# links via the docker-options plugin
+# a neo4j service can be linked to a container running an app
+# this will use native docker links via the docker-options plugin
 # here we link it to our 'playground' app
 # NOTE: this will restart your app
 dokku neo4j:link graph playground
