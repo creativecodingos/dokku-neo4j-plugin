@@ -292,7 +292,7 @@ service_start() {
   if [[ -n $PREVIOUS_ID ]]; then
     docker start "$PREVIOUS_ID" > /dev/null
     dokku_log_verbose_quiet "Waiting for container to be ready"
-    docker run --rm --link "$SERVICE_NAME:$NEO4J_PLUGIN_COMMAND_PREFIX" aanand/wait
+    docker run --rm --link "$SERVICE_NAME:$NEO4J_PLUGIN_COMMAND_PREFIX" dokkupaas/wait
     service_port_unpause "$SERVICE"
     dokku_log_info2 "Container started: $SERVICE"
   else
