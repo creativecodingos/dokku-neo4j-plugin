@@ -427,7 +427,7 @@ s3_archive_backup_file() {
         -F "x-amz-date="$REQUEST_TIME"" \
         -F "Policy="$UPLOAD_REQUEST"" \
         -F "X-Amz-Signature="$SIGNATURE"" \
-        -F "file=@"$FILE http://$S3_BUCKET.s3.amazonaws.com/
+        -F "file=@"$FILE http://$S3_BUCKET.s3.$S3_REGION.amazonaws.com/
 
       echo
       dokku_log_info1 "Backup archive transferred to S3"
