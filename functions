@@ -539,7 +539,7 @@ service_live_dump() {
   local DOKKU_GROUP=$(id -g dokku)
 
   mkdir -p "$SERVICE_TMP_BACKUP/graph.db" > /dev/null
-  docker run -it --link "$SERVICE_NAME:neo4j" -v "$SERVICE_TMP_BACKUP/graph.db:/var/neo4j/backup" --env "DOKKU_USER=$DOKKU_USER" --env "DOKKU_GROUP=$DOKKU_GROUP" --rm "$SERVICE_VERSION" sh -c '/var/neo4j/bin/neo4j-backup -host "$NEO4J_PORT_7474_TCP_ADDR" -to /var/neo4j/backup && chown -R "$DOKKU_USER:$DOKKU_GROUP" /var/neo4j/backup'
+  docker run -i --link "$SERVICE_NAME:neo4j" -v "$SERVICE_TMP_BACKUP/graph.db:/var/neo4j/backup" --env "DOKKU_USER=$DOKKU_USER" --env "DOKKU_GROUP=$DOKKU_GROUP" --rm "$SERVICE_VERSION" sh -c '/var/neo4j/bin/neo4j-backup -host "$NEO4J_PORT_7474_TCP_ADDR" -to /var/neo4j/backup && chown -R "$DOKKU_USER:$DOKKU_GROUP" /var/neo4j/backup'
   tar --transform "s/^./graph.db/" -czvf "$ARCHIVE_FILE" -C "$SERVICE_TMP_BACKUP/graph.db" . > /dev/null
   rm -rf "$SERVICE_TMP_BACKUP"
 }
